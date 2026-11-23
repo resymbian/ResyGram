@@ -29,15 +29,20 @@ would keep open:
       data centres serve MTPROTO above the privileged port range; the client
       falls back to 5222 when the handset refuses 443)
 - [x] An icon in the launcher, not only inside the app
+- [x] A splash with a spinner while the client builds itself, so a launch looks
+      like a launch instead of a black screen
+- [x] A setup flow where the right soft key means "connect"/"next"/"sign in",
+      and Exit sits in the left menu
+- [x] Emoji entry: the composer's Emoji command inserts from the same atlas the
+      messages are drawn with
+- [x] Smaller and faster: a `-Release` JAR is ~30% smaller than the same tree
+      built without optimisation and obfuscation (738 KB -> 518 KB)
 - [ ] Telegram-style chat bubbles, full screen, composer in the conversation
-- [ ] Emoji entry and rendering in the message list
 - [ ] Attachments: thumbnails, download, open with the phone's own viewer
 - [ ] Search and join channels, groups and people
 - [ ] Upload files and photos from the phone
 - [ ] Background delivery with a notification, without draining the battery
-- [ ] A spinner wherever something is loading, and an instant start
-- [ ] A setup flow where the right soft key means "continue", not "exit"
-- [ ] Smaller and faster: fewer classes, less heap, colder battery
+- [ ] A spinner wherever something is loading, not only at startup
 
 ## Build
 
