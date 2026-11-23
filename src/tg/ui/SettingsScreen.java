@@ -86,9 +86,9 @@ public final class SettingsScreen extends Form
              + "empty. Turn Off if that happens.");
         append(mediaPreviews);
         append(notifications);
-        append("A note needs the native bridge listening on 127.0.0.1:4711 "
-             + "(ResyGram Notify, or Discofi Notify). Without it nothing is sent "
-             + "and nothing fails.");
+        append("A note needs the NotiHelper bridge listening on 127.0.0.1:4711. "
+             + "It also leaves the message in Messaging > Inbox. Without it "
+             + "nothing is sent and nothing fails.");
         append(theme);
         append(logLevel);
         append(remoteLog);

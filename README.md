@@ -94,10 +94,11 @@ build compiles against a stub of the optional `FileConnection` interface. A
 handset without JSR-75 still runs; saving and browsing then say so instead of
 failing silently.
 
-System notes need the companion native bridge (DiscofiNotify.sisx, built from
-the Discofi tree with the S60 SDK in Docker). It listens on loopback only, shows
-an Avkon global note and answers one byte. With it absent, notifications are
-silently skipped - the client never depends on it.
+System notes need the companion native bridge, **NotiHelper** (built from the
+Discofi tree with the S60 SDK in Docker, `native/e51/out/NotiHelper.sisx`). It
+listens on loopback only, shows an Avkon global note, writes the same text as an
+unread entry in Messaging's Inbox, and answers one byte. With it absent,
+notifications are silently skipped - the client never depends on it.
 
 In **Settings → Mode**, `Auto` reaches Telegram directly: 443 first, then 5222
 when the handset's security policy refuses privileged ports. Leave MTProxy and

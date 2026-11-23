@@ -13,7 +13,7 @@ public final class AppSettings
     public boolean mediaPreviews = true;
 
     /**
-     * Ask the native bridge (Discofi Notify or ResyGram Notify) for a system
+     * Ask the NotiHelper bridge for a system
      * note on new messages. Off means no loopback socket is ever opened.
      */
     public boolean notifications = true;

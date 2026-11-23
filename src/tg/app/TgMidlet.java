@@ -8243,8 +8243,8 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
                 }
                 else
                 {
-                    showAlert(error + "\nInstall ResyGram Notify (or Discofi "
-                            + "Notify), start it once, and try again.",
+                    showAlert(error + "\nInstall NotiHelper, start it once, "
+                            + "and try again.",
                             AlertType.INFO, dialogList);
                 }
             }
