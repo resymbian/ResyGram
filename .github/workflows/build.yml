@@ -5,9 +5,10 @@ name: Build
 # the environment - ahead of any secrets/ file, which CI does not have - and
 # generated into build-only sources that .gitignore keeps out of the tree.
 #
-# Push to main: build and attach the pair as a workflow artifact.
-# Push a v* tag: the same pair, published on a GitHub Release.
-# workflow_dispatch: build on demand, no release.
+# Every successful build on main publishes a GitHub Release tagged v<version>,
+# so the download link in the README always points at the latest JAR without
+# anyone tagging by hand. A v* tag pushed by hand builds the same way and
+# replaces the release with the same version.
 
 on:
   push:
@@ -17,7 +18,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write        # required by softprops/action-gh-release
+  contents: write        # the release job writes tags and releases
 
 concurrency:
   group: build-${{ github.ref }}
@@ -29,6 +30,8 @@ jobs:
     # releases from; the Linux runner's JDK 8 download kept arriving as a
     # non-gzip payload.
     runs-on: windows-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
 
     steps:
       - uses: actions/checkout@v4
@@ -65,6 +68,7 @@ jobs:
       # has to agree with it: a JAD whose MIDlet-Version contradicts the release
       # it came from confuses the application manager on upgrade.
       - name: Resolve version
+        id: version
         shell: pwsh
         run: |
           $m = Select-String -Path tools/build.ps1 -Pattern '^\$AppVersion\s*=\s*"([^"]+)"' |
@@ -80,6 +84,7 @@ jobs:
           }
           Write-Host "version $version"
           "APP_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       # -Env production is not optional: the default is Telegram's test data
       # centres, which hold no real accounts, and an auth_key is bound to the
@@ -137,7 +142,9 @@ jobs:
 
   release:
     needs: build
-    if: github.ref_type == 'tag'
+    # Tags and main, but not pull requests: a PR from a fork has no secrets, so
+    # its JAR could not connect to Telegram and must not be published.
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -147,5 +154,21 @@ jobs:
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          # Same tag for the same version, so rebuilding main updates the
+          # existing release instead of piling up v0.1.0-1, -2, -3.
+          tag_name: v${{ needs.build.outputs.version }}
+          name: ResyGram ${{ needs.build.outputs.version }}
+          make_latest: true
           files: dist/**/*
-          generate_release_notes: true
+          body: |
+            ResyGram ${{ needs.build.outputs.version }} - Telegram for legacy Java
+            phones, built by GitHub Actions from this commit.
+
+            Download the `.jar` and its matching `.jad` into the same folder on
+            the phone, then open the `.jad` (or the `.jar` if the handset refuses
+            it). The JAD records the exact size of its JAR: do not rename either
+            file.
+
+            In Settings, mode **Auto** connects directly: 443 first, then 5222
+            when the handset's policy refuses privileged ports. No proxy is
+            needed on an unsigned MIDlet.

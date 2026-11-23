@@ -42,7 +42,8 @@ would keep open:
 - [ ] Search and join channels, groups and people
 - [ ] Upload files and photos from the phone
 - [ ] Background delivery with a notification, without draining the battery
-- [ ] A spinner wherever something is loading, not only at startup
+- [x] A spinner on startup and on every blocking step (connect, sign-in,
+      sending), instead of a static paragraph that looks like a hang
 
 ## Build
 

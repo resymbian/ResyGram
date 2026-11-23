@@ -90,6 +90,7 @@ import tg.plat.RmsOutgoingStore;
 import tg.plat.ReportUpload;
 import tg.plat.RmsUpdateStateStore;
 import tg.plat.TcpLogSink;
+import tg.ui.BusyScreen;
 import tg.ui.ChatScreen;
 import tg.ui.AvatarCache;
 import tg.ui.DialogListScreen;
@@ -12525,10 +12526,17 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
 
     // ------------------------------------------------------------ helpers
 
+    /**
+     * A wait the user can see is a wait.
+     *
+     * This used to be a Form with one paragraph and no movement at all, which on
+     * a handset that spends ten seconds generating an auth_key is
+     * indistinguishable from a hang. BusyScreen animates, and keeps the two
+     * commands this had - Log and Exit - reachable from the soft key menu.
+     */
     private void showBusy(String title, String text)
     {
-        Form busy = new Form(title);
-        busy.append(text);
+        BusyScreen busy = new BusyScreen(currentTheme(), title, text);
         busy.addCommand(cmdLog);
         busy.addCommand(cmdExit);
         busy.setCommandListener(this);
