@@ -1,6 +1,8 @@
 package tg.ui;
 
 import javax.microedition.lcdui.Canvas;
+import javax.microedition.lcdui.Command;
+import javax.microedition.lcdui.CommandListener;
 import javax.microedition.lcdui.Font;
 import javax.microedition.lcdui.Graphics;
 import javax.microedition.lcdui.Image;
@@ -82,6 +84,28 @@ public class ChatScreen extends Canvas
 
     /** Line offset tag for the "who, when" row above a message. */
     private static final int SENDER_ROW = 3000;
+
+    // Raw key codes Series 60 delivers to a Canvas for the two soft keys. MIDP
+    // has no constants for them - a Device one-shot made every handset its own
+    // case, and these two are the only values the E51 sends.
+    private static final int KEY_SOFT_LEFT = -6;
+    private static final int KEY_SOFT_RIGHT = -7;
+
+    /**
+     * Fullscreen, with the two soft keys drawn here instead of by the AMS.
+     *
+     * The point is the rows: the native bar plus its padding is most of a text
+     * line on a 240-pixel-tall screen. The cost is that the commands the AMS used
+     * to list are now this screen's problem, hence {@link #setMenu} - the left
+     * key opens a drawn menu over the transcript, the right key runs the
+     * composing action.
+     */
+    private boolean fullscreen;
+    private Command softRight;
+    private Command[] menu = new Command[0];
+    private CommandListener commandDispatch;
+    private boolean menuOpen;
+    private int menuSelection;
 
     /** Horizontal room a bubble takes from the transcript column. */
     private int bubbleInset()
@@ -935,6 +959,47 @@ public class ChatScreen extends Canvas
             y += lineHeight;
         }
         g.setClip(bodyClipX, bodyClipY, bodyClipWidth, bodyClipHeight);
+        if (fullscreen)
+        {
+            UiChrome.footer(g, theme, metrics, font, "Options",
+                    softRight == null ? "" : softRight.getLabel());
+            if (menuOpen) { paintMenu(g); }
+        }
+    }
+
+    /** The left key's menu, drawn over the transcript rather than by the AMS. */
+    private void paintMenu(Graphics g)
+    {
+        if (menu.length == 0) { return; }
+        int rowHeight = lineHeight;
+        int visible = menu.length < 7 ? menu.length : 7;
+        int height = visible * rowHeight + metrics.padding * 2;
+        int top = metrics.height - metrics.footerHeight - height;
+        if (top < metrics.bodyTop) { top = metrics.bodyTop; }
+        g.setColor(theme.surface);
+        g.fillRect(0, top, metrics.width, height);
+        g.setColor(theme.border);
+        g.drawRect(0, top, metrics.width - 1, height - 1);
+        int first = 0;
+        if (menuSelection >= visible) { first = menuSelection - visible + 1; }
+        int y = top + metrics.padding;
+        g.setFont(font);
+        for (int row = 0; row < visible; row++)
+        {
+            int index = first + row;
+            if (index >= menu.length) { break; }
+            boolean selected = index == menuSelection;
+            if (selected)
+            {
+                g.setColor(theme.selection);
+                g.fillRect(metrics.padding, y, metrics.width - metrics.padding * 2,
+                        rowHeight);
+            }
+            g.setColor(selected ? theme.selectionText : theme.text);
+            g.drawString(menu[index].getLabel(), metrics.padding * 2,
+                    y + textOffsetY, Graphics.TOP | Graphics.LEFT);
+            y += rowHeight;
+        }
     }
 
     /**
@@ -1000,7 +1065,15 @@ public class ChatScreen extends Canvas
         {
             end++;
         }
-        while (end > idx && lineMessageOffsets[end] == SENDER_ROW) { end--; }
+        // The name row and the reaction/comment rows are annotations under the
+        // message, not part of its balloon: inside it, they would either be
+        // clipped or leave an empty band below the text.
+        while (end > idx
+                && (lineMessageOffsets[end] == SENDER_ROW
+                    || lineMessageOffsets[end] >= 2000))
+        {
+            end--;
+        }
         return end;
     }
 
@@ -1081,6 +1154,8 @@ public class ChatScreen extends Canvas
         try { action = getGameAction(keyCode); }
         catch (Throwable ignored) { }
 
+        if (fullscreen && handleSoftKeys(keyCode, action)) { return; }
+
         if (action == Canvas.UP || keyCode == Canvas.KEY_NUM2)
         {
             focus(-1);
@@ -1101,6 +1176,61 @@ public class ChatScreen extends Canvas
         {
             activateFocused();
         }
+    }
+
+    /**
+     * The fullscreen screen's own keys.
+     *
+     * @return true when the key was consumed here
+     */
+    private boolean handleSoftKeys(int keyCode, int action)
+    {
+        if (keyCode == KEY_SOFT_LEFT)
+        {
+            menuOpen = menu.length > 0 && !menuOpen;
+            repaint();
+            return true;
+        }
+        if (keyCode == KEY_SOFT_RIGHT)
+        {
+            if (menuOpen)
+            {
+                menuOpen = false;
+                repaint();
+            }
+            else
+            {
+                runCommand(softRight);
+            }
+            return true;
+        }
+        if (!menuOpen) { return false; }
+        if (action == Canvas.UP || keyCode == Canvas.KEY_NUM2)
+        {
+            if (menuSelection > 0) { menuSelection--; }
+        }
+        else if (action == Canvas.DOWN || keyCode == Canvas.KEY_NUM8)
+        {
+            if (menuSelection + 1 < menu.length) { menuSelection++; }
+        }
+        else if (action == Canvas.FIRE || keyCode == Canvas.KEY_NUM5)
+        {
+            menuOpen = false;
+            runCommand(menu[menuSelection]);
+        }
+        else if (action == Canvas.LEFT || action == Canvas.RIGHT
+                || keyCode == KEY_SOFT_LEFT)
+        {
+            menuOpen = false;
+        }
+        repaint();
+        return true;
+    }
+
+    private void runCommand(Command command)
+    {
+        if (command == null || commandDispatch == null) { return; }
+        commandDispatch.commandAction(command, this);
     }
 
     protected void keyRepeated(int keyCode)
@@ -1754,8 +1884,48 @@ public class ChatScreen extends Canvas
         thumbnailCount = 0;
     }
 
+    /**
+     * Turn the native command bar off and reserve room for the drawn one.
+     *
+     * The mode change has to happen before the canvas is shown for the extra rows
+     * to be there on the first paint.
+     */
+    public void setFullscreen(boolean on)
+    {
+        if (fullscreen == on) { return; }
+        fullscreen = on;
+        setFullScreenMode(on);
+        layoutMessages(currentMessages, true);
+    }
+
+    /**
+     * The commands the drawn menu lists, and the one the right key runs.
+     *
+     * A Canvas cannot be asked for its own commands, so the owner hands them over
+     * once. Back is expected to be in {@code entries}: with the AMS bar gone, the
+     * menu is the only way out of the conversation.
+     */
+    public void setSoftKeys(Command right, Command[] entries)
+    {
+        softRight = right;
+        menu = entries == null ? new Command[0] : entries;
+        if (menuSelection >= menu.length) { menuSelection = 0; }
+        repaint();
+    }
+
+    public void setCommandListener(CommandListener listener)
+    {
+        super.setCommandListener(listener);
+        commandDispatch = listener;
+    }
+
     private void updateMetrics()
     {
+        // A fixed inset rather than metrics.padding: padding is only known
+        // after update(), so deriving the footer from it would make the body
+        // height change between the layout and the paint that follows it, and
+        // the newest bubble would be clipped by the bar it did not know about.
+        metrics.footerHeight = fullscreen ? lineHeight + 8 : 0;
         metrics.update(getWidth(), getHeight(), font, metaFont);
     }
 }

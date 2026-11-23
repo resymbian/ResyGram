@@ -7066,6 +7066,17 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
         screen.addCommand(cmdFirstUnread);
         screen.addCommand(cmdFindMessages);
         screen.addCommand(cmdMarkAllRead);
+        // Fullscreen, because the native bar plus its padding is nearly a whole
+        // text line on this panel. The two keys are then the screen's job: the
+        // right one composes, the left one lists what the AMS used to list.
+        screen.setFullscreen(true);
+        screen.setSoftKeys(cmdWrite, new Command[]
+        {
+            cmdBack, cmdReply, cmdForward, cmdReactions, cmdViewFullText,
+            cmdEntityActions, cmdDeleteMessage, cmdFindMessages, cmdOlder,
+            cmdJumpLatest, cmdFirstUnread, cmdMarkAllRead, cmdChatInfo,
+            cmdProfile, cmdRefresh, cmdOutbox, cmdReconnect, cmdLog
+        });
         screen.setCommandListener(this);
         screen.setTouchContextListener(touchContextListener);
         screen.setActivationListener(new ChatScreen.ActivationListener()

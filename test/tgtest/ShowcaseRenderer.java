@@ -10,6 +10,7 @@ import java.util.TimeZone;
 import java.util.Vector;
 
 import javax.imageio.ImageIO;
+import javax.microedition.lcdui.Command;
 import javax.microedition.lcdui.Graphics;
 import javax.microedition.lcdui.Image;
 
@@ -107,6 +108,7 @@ public final class ShowcaseRenderer
         };
 
         ExposedChat screen = new ExposedChat(Theme.byId(Theme.LIGHT));
+        fullscreen(screen);
         screen.setTitle(group.title);
         screen.setPeer(group);
         screen.setStatus("3 members");
@@ -136,6 +138,7 @@ public final class ShowcaseRenderer
         };
 
         ExposedChat screen = new ExposedChat(Theme.byId(Theme.DARK));
+        fullscreen(screen);
         screen.setTitle(channel.title);
         screen.setPeer(channel);
         screen.setStatus("online");
@@ -218,6 +221,15 @@ public final class ShowcaseRenderer
             graphics.dispose();
         }
         ImageIO.write(scaled, "png", file);
+    }
+
+    /** The chat is shown the way the app shows it: fullscreen, with its own bar. */
+    private static void fullscreen(ChatScreen screen)
+    {
+        screen.setFullscreen(true);
+        screen.setSoftKeys(new Command("Write", Command.OK, 1),
+                new Command[] { new Command("Back", Command.BACK, 1),
+                        new Command("Reply", Command.SCREEN, 2) });
     }
 
     private interface ExposedCanvas

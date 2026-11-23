@@ -39,7 +39,9 @@ would keep open:
       messages are drawn with
 - [x] Smaller and faster: a `-Release` JAR is ~30% smaller than the same tree
       built without optimisation and obfuscation (738 KB -> 518 KB)
-- [ ] Telegram-style chat bubbles, full screen, composer in the conversation
+- [x] Telegram-style chat bubbles, and the conversation in full screen with its
+      own two-key bar: the right key composes, the left opens the drawn menu that
+      replaces the AMS's command list
 - [ ] Attachments: thumbnails, download, open with the phone's own viewer
 - [ ] Search and join channels, groups and people
 - [ ] Upload files and photos from the phone

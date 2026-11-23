@@ -13,6 +13,8 @@ public final class Metrics
     public int headerHeight;
     public int bodyTop;
     public int bodyBottom;
+    /** Height reserved at the bottom for a screen-drawn command bar. */
+    public int footerHeight;
     public int bodyHeight;
     public int contentWidth;
     public int rowHeight;
@@ -36,8 +38,9 @@ public final class Metrics
                 EmojiText.GLYPH);
         headerHeight = lineHeight + padding * 2;
         bodyTop = Math.min(this.height, headerHeight);
-        // Canvas height already excludes the native MIDP command bar.
-        bodyBottom = this.height;
+        // Canvas height already excludes the native MIDP command bar; a canvas
+        // that draws its own (fullscreen) reserves the room itself.
+        bodyBottom = Math.max(headerHeight, this.height - footerHeight);
         bodyHeight = Math.max(1, bodyBottom - bodyTop);
         contentWidth = Math.max(1, this.width - padding * 2);
         iconSize = Math.max(lineHeight, lineHeight * 2);
