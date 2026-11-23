@@ -25,7 +25,10 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # Windows is what tools/ is written for and what the upstream project
+    # releases from; the Linux runner's JDK 8 download kept arriving as a
+    # non-gzip payload.
+    runs-on: windows-latest
 
     steps:
       - uses: actions/checkout@v4

@@ -94,6 +94,7 @@ import tg.ui.ChatScreen;
 import tg.ui.AvatarCache;
 import tg.ui.DialogListScreen;
 import tg.ui.DateTime;
+import tg.ui.EmojiPickerScreen;
 import tg.ui.EmojiText;
 import tg.ui.SettingsScreen;
 import tg.ui.SplashScreen;
@@ -147,7 +148,13 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
      * shipped before the budget existed - 40/30 per request, 200/120 held.
      */
 
-    private final Command cmdExit    = new Command("Exit", Command.EXIT, 10);
+    // SCREEN, not EXIT, and that is what frees the right soft key. S60 gives
+    // that key to an EXIT command when a screen has one, which is how setup came
+    // to offer "Exit" as the default button instead of "Next"; typed SCREEN it
+    // stays in the left soft key's menu, last, and the priority-1 command
+    // ("Connect", "Next", "Sign in") is the one the handset can put in its
+    // place. See the note on cmdConnect for why nothing here is Command.OK.
+    private final Command cmdExit    = new Command("Exit", Command.SCREEN, 30);
     private final Command cmdBack    = new Command("Back", Command.BACK, 2);
 
     // Command.SCREEN, not Command.OK, and the reason is measured rather than
@@ -159,6 +166,9 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
     // the primary action in the same type as everything else it shares a menu
     // with puts priority back in charge, and priority 1 puts it first.
     private final Command cmdConnect = new Command("Connect", Command.SCREEN, 1);
+    // The three setup steps a user walks through in order. Priority 1 and type
+    // SCREEN for the reason above: they are the default action on their screen
+    // only because they sort first, not because they claim a command type.
     private final Command cmdNext    = new Command("Next", Command.SCREEN, 1);
     private final Command cmdSignIn  = new Command("Sign in", Command.SCREEN, 1);
     private final Command cmdCheckPassword =
@@ -175,6 +185,8 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
             new Command("Cancel", Command.CANCEL, 1);
     private final Command cmdRefresh = new Command("Refresh", Command.SCREEN, 3);
     private final Command cmdWrite   = new Command("Write", Command.SCREEN, 1);
+    /** The composer's emoji picker: the keypad cannot type one. */
+    private final Command cmdEmoji   = new Command("Emoji", Command.SCREEN, 3);
     private final Command cmdSend    = new Command("Send", Command.SCREEN, 1);
     // Diagnostics belong at the bottom of every menu they appear in.
     private final Command cmdLog     = new Command("Log", Command.SCREEN, 20);
@@ -1314,6 +1326,10 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
         {
             destroyApp(true);
             notifyDestroyed();
+        }
+        else if (c == cmdEmoji)
+        {
+            showEmojiPicker();
         }
         else if (c == cmdConnect)
         {
@@ -8888,6 +8904,37 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
      * @param next a state from {@link ComposerState}, or null when the caller
      *             had no chat to open one for
      */
+    /**
+     * Insert an emoji into the composer at the caret.
+     *
+     * The picker is shown over the composer rather than pushed onto the
+     * navigation stack: it is a keyboard, not a place, and Back returns to the
+     * message being written with its text and caret intact.
+     */
+    private void showEmojiPicker()
+    {
+        if (composeBox == null) { return; }
+        EmojiPickerScreen picker =
+                new EmojiPickerScreen(currentTheme(),
+                        new EmojiPickerScreen.PickListener()
+        {
+            public void onEmojiPicked(String emoji)
+            {
+                if (composeBox != null)
+                {
+                    if (emoji != null)
+                    {
+                        int at = composeBox.getCaretPosition();
+                        if (at < 0) { at = composeBox.size(); }
+                        composeBox.insert(emoji, at);
+                    }
+                    display.setCurrent(composeBox);
+                }
+            }
+        });
+        display.setCurrent(picker);
+    }
+
     private void openComposer(ComposerState next)
     {
         if (next == null)
@@ -8909,6 +8956,7 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
         {
             composeBox = new TextBox("Message", "", 1000, TextField.ANY);
             composeBox.addCommand(cmdSend);
+            composeBox.addCommand(cmdEmoji);
             composeBox.addCommand(cmdBack);
             composeBox.setCommandListener(this);
         }
