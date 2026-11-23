@@ -20,9 +20,8 @@ import javax.microedition.lcdui.Graphics;
  */
 public final class BusyScreen extends Canvas
 {
-    private static final int DOTS = 8;
-    private static final int FRAME_MS = 120;
-    private static final int MAX_FRAMES = 40;
+    private static final int FRAME_MS = Spinner.FRAME_MS;
+    private static final int MAX_FRAMES = 600;
 
     private final Theme theme;
     private final String title;
@@ -33,6 +32,8 @@ public final class BusyScreen extends Canvas
 
     private int frame;
     private int framesLeft = MAX_FRAMES;
+    /** Read by the timer thread, written by the display thread. */
+    private volatile boolean running;
 
     public BusyScreen(Theme theme, String title, String text)
     {
@@ -43,7 +44,26 @@ public final class BusyScreen extends Canvas
                                  Font.SIZE_MEDIUM);
         textFont = Font.getFont(Font.FACE_PROPORTIONAL, Font.STYLE_PLAIN,
                                 Font.SIZE_SMALL);
+    }
+
+    /**
+     * Start animating only once the handset is actually showing this canvas.
+     *
+     * Starting in the constructor would mean the timer runs while the screen is
+     * still being constructed and, worse, keeps running after whatever the work
+     * produced has replaced it: the screen is never told it is going away.
+     * showNotify/hideNotify are the two moments the platform does tell it.
+     */
+    protected void showNotify()
+    {
+        running = true;
+        framesLeft = MAX_FRAMES;
         start();
+    }
+
+    protected void hideNotify()
+    {
+        running = false;
     }
 
     private void start()
@@ -52,9 +72,9 @@ public final class BusyScreen extends Canvas
         {
             public void run()
             {
-                while (framesLeft-- > 0)
+                while (running && framesLeft-- > 0)
                 {
-                    frame = (frame + 1) % DOTS;
+                    frame++;
                     repaint();
                     try
                     {
@@ -84,8 +104,9 @@ public final class BusyScreen extends Canvas
         g.drawString(title, cx, y, Graphics.HCENTER | Graphics.TOP);
         y += titleFont.getHeight() + 6;
 
-        drawSpinner(g, cx, y + 8);
-        y += 26;
+        int barWidth = Math.min(metrics.width - metrics.padding * 2, 200);
+        Spinner.draw(g, theme, cx - barWidth / 2, y + 10, barWidth, frame);
+        y += Spinner.height(theme, barWidth) + 22;
 
         g.setFont(textFont);
         g.setColor(theme.secondaryText);
@@ -152,20 +173,4 @@ public final class BusyScreen extends Canvas
         return out;
     }
 
-    private void drawSpinner(Graphics g, int cx, int cy)
-    {
-        int radius = 9;
-        for (int i = 0; i < DOTS; i++)
-        {
-            int x = cx + (COS[i] * radius) / 256;
-            int y = cy + (SIN[i] * radius) / 256;
-            g.setColor(i == frame ? theme.accent : theme.secondaryText);
-            g.fillArc(x - 2, y - 2, 4, 4, 0, 360);
-        }
-    }
-
-    // Eight fixed angles; CLDC 1.1 trig would be a double conversion per dot per
-    // frame for a shape that never changes.
-    private static final int[] COS = { 256, 181, 0, -181, -256, -181, 0, 181 };
-    private static final int[] SIN = { 0, 181, 256, 181, 0, -181, -256, -181 };
 }

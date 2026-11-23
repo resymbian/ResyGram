@@ -31,8 +31,10 @@ would keep open:
 - [x] An icon in the launcher, not only inside the app
 - [x] A splash with a spinner while the client builds itself, so a launch looks
       like a launch instead of a black screen
-- [x] A setup flow where the right soft key means "connect"/"next"/"sign in",
-      and Exit sits in the left menu
+- [x] A setup flow whose primary action is the right soft key: Connect,
+      Continue and Sign in are `Command.OK`, the only type Series 60 hands to
+      that key, and Exit sits in the left menu. The start screen now says to
+      press Connect instead of opening with a diagnostic line.
 - [x] Emoji entry: the composer's Emoji command inserts from the same atlas the
       messages are drawn with
 - [x] Smaller and faster: a `-Release` JAR is ~30% smaller than the same tree
@@ -42,8 +44,10 @@ would keep open:
 - [ ] Search and join channels, groups and people
 - [ ] Upload files and photos from the phone
 - [ ] Background delivery with a notification, without draining the battery
-- [x] A spinner on startup and on every blocking step (connect, sign-in,
-      sending), instead of a static paragraph that looks like a hang
+- [x] A loading bar, not a dot ring: the splash and every blocking step
+      (connect, sign-in, sending) sweep a progress bar so the wait reads as a
+      process. The busy screen starts on `showNotify` and stops on `hideNotify`,
+      so it cannot keep repainting behind a screen that replaced it.
 
 ## Build
 

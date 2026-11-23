@@ -15,17 +15,16 @@ import javax.microedition.lcdui.Image;
  * and the work then runs behind it, so the handset has something to draw
  * immediately.
  *
- * The spinner is drawn rather than animated from a few bitmaps: eight dots on a
- * circle with one lit, stepped by a timer thread. That is 120 ms of repaint per
- * frame at the size of a 320x240 panel, which is cheap enough that it cannot be
- * mistaken for the reason a slow handset is slow - and it never allocates a new
- * object per frame, which matters because the heap is exactly what is being
- * measured right after.
+ * The indicator is a sweeping progress bar (see {@link Spinner}) stepped by a
+ * timer thread. That is 90 ms of repaint per frame at the size of a 320x240
+ * panel, which is cheap enough that it cannot be mistaken for the reason a slow
+ * handset is slow - and it never allocates a new object per frame, which matters
+ * because the heap is exactly what is being measured right after.
  */
 public final class SplashScreen extends Canvas
 {
     private static final int DOTS = 8;
-    private static final int FRAME_MS = 120;
+    private static final int FRAME_MS = Spinner.FRAME_MS;
 
     private final Theme theme;
     private final Font titleFont;
@@ -76,7 +75,7 @@ public final class SplashScreen extends Canvas
             {
                 while (running)
                 {
-                    frame = (frame + 1) % DOTS;
+                    frame++;
                     repaint();
                     try
                     {
@@ -123,7 +122,10 @@ public final class SplashScreen extends Canvas
         g.drawString("ResyGram", w / 2, centreY + 24,
                      Graphics.HCENTER | Graphics.TOP);
 
-        drawSpinner(g, w / 2, centreY + 24 + titleFont.getHeight() + 12);
+        int barWidth = Math.min(w - 24, 220);
+        if (barWidth < 40) { barWidth = w - 8; }
+        Spinner.draw(g, theme, (w - barWidth) / 2,
+                centreY + 24 + titleFont.getHeight() + 14, barWidth, frame);
 
         g.setFont(statusFont);
         g.setColor(theme.secondaryText);
@@ -132,34 +134,4 @@ public final class SplashScreen extends Canvas
                      Graphics.HCENTER | Graphics.TOP);
     }
 
-    private void drawSpinner(Graphics g, int cx, int cy)
-    {
-        int radius = 9;
-        for (int i = 0; i < DOTS; i++)
-        {
-            int angle = i * 360 / DOTS;
-            int x = cx + (radius * cos(angle));
-            int y = cy + (radius * sin(angle));
-            // The leading dot is accent-coloured and the rest are the theme's
-            // secondary text, so a single frame already reads as a spinner with
-            // a direction rather than as a ring of dots.
-            g.setColor(i == frame ? theme.accent : theme.secondaryText);
-            g.fillArc(x - 2, y - 2, 4, 4, 0, 360);
-        }
-    }
-
-    // CLDC 1.1 has no Math.sin/cos with a double return in every profile, and
-    // this needs eight fixed angles rather than precision.
-    private static final int[] COS = { 256, 181, 0, -181, -256, -181, 0, 181 };
-    private static final int[] SIN = { 0, 181, 256, 181, 0, -181, -256, -181 };
-
-    private static int cos(int angle)
-    {
-        return (COS[(angle * DOTS / 360) % DOTS] * 3) / 4;
-    }
-
-    private static int sin(int angle)
-    {
-        return (SIN[(angle * DOTS / 360) % DOTS] * 3) / 4;
-    }
 }

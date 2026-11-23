@@ -308,6 +308,7 @@ public final class EmulatorSmokeTest
             throws Exception
     {
         Vector commands = commandsOf(d);
+        int defaults = 0;
         for (int i = 0; i < commands.size(); i++)
         {
             Command c = (Command) commands.elementAt(i);
@@ -315,6 +316,20 @@ public final class EmulatorSmokeTest
             if (type == Command.BACK || type == Command.EXIT
                     || type == Command.CANCEL)
             {
+                continue;
+            }
+            // OK is what a Series 60 handset puts on the right soft key, so the
+            // primary action of a screen is typed OK on purpose. The guarantee
+            // that matters is that OK never means anything but that action:
+            // priority 1 and at most one per screen, or the right soft key stops
+            // being predictable.
+            if (type == Command.OK)
+            {
+                defaults++;
+                Assert.isTrue(screen + ": \"" + c.getLabel() + "\" is OK-typed "
+                        + "but not the default action (priority "
+                        + c.getPriority() + ", expected 1)",
+                        c.getPriority() == 1);
                 continue;
             }
             if (type != Command.SCREEN)
@@ -325,6 +340,8 @@ public final class EmulatorSmokeTest
                         + "regardless of its priority.");
             }
         }
+        Assert.isTrue(screen + ": more than one OK command (" + defaults
+                + "); the right soft key would be ambiguous", defaults <= 1);
     }
 
     private static Command byLabel(Displayable d, String label) throws Exception

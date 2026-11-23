@@ -158,22 +158,26 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
     private final Command cmdExit    = new Command("Exit", Command.SCREEN, 30);
     private final Command cmdBack    = new Command("Back", Command.BACK, 2);
 
-    // Command.SCREEN, not Command.OK, and the reason is measured rather than
-    // stylistic. MIDP leaves menu placement to the handset, and it only
-    // promises to honour priority *within* a type. The Alcatel OT-810D builds
-    // its Options menu type by type with SCREEN ahead of OK, which buried
-    // "Connect", "Next" and "Sign in" underneath "Log" - the single most
-    // important action on each screen was the last line of the menu. Declaring
-    // the primary action in the same type as everything else it shares a menu
-    // with puts priority back in charge, and priority 1 puts it first.
-    private final Command cmdConnect = new Command("Connect", Command.SCREEN, 1);
-    // The three setup steps a user walks through in order. Priority 1 and type
-    // SCREEN for the reason above: they are the default action on their screen
-    // only because they sort first, not because they claim a command type.
-    private final Command cmdNext    = new Command("Next", Command.SCREEN, 1);
-    private final Command cmdSignIn  = new Command("Sign in", Command.SCREEN, 1);
+    // Command.OK, and the type is what makes these reachable at all on the
+    // handset this is built for. MIDP does not promise a default action: on
+    // Series 60 the right soft key is the AMS's, and it only hands that key to a
+    // command whose type is OK. Everything else - including a SCREEN command at
+    // priority 1, which is what these were - lives under "Options" on the left,
+    // so a user looking at "Phone number" saw no way to continue and the right
+    // key said "Exit". Type OK puts Connect / Continue / Sign in on the right key
+    // where the platform's own conventions had been leading them.
+    //
+    // The OT-810D measurement behind the old comment still stands - that handset
+    // builds its Options menu type by type, with SCREEN ahead of OK - but it is
+    // not the target, and a command that the target cannot reach is worse than a
+    // menu order on a handset this does not ship to. The smoke test now permits
+    // OK for the single default action per screen and still rejects the rest.
+    private final Command cmdConnect = new Command("Connect", Command.OK, 1);
+    // The three setup steps a user walks through in order.
+    private final Command cmdNext    = new Command("Continue", Command.OK, 1);
+    private final Command cmdSignIn  = new Command("Sign in", Command.OK, 1);
     private final Command cmdCheckPassword =
-            new Command("Check password", Command.SCREEN, 1);
+            new Command("Check password", Command.OK, 1);
     private final Command cmdResendCode =
             new Command("Resend code", Command.SCREEN, 2);
     private final Command cmdChangeNumber =
@@ -2151,7 +2155,11 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
     private void showStartScreen()
     {
         Form form = new Form("ResyGram");
-        form.append("No network connection has been opened yet.\n\n");
+        // The very first thing a new user sees. It used to open with a
+        // diagnostic line and never say what to do, which on this handset means
+        // the right soft key - the one a Series 60 user reaches for - looked
+        // like "Exit" while the action sat under Options.
+        form.append("Press Connect to sign in.\n\n");
         form.append("State: " + connectionLabel + "\n");
         form.append("Mode: " + ConnectionConfig.name(connectionConfig.mode) + "\n");
         if (connectionConfig.hasProxy())
@@ -2284,7 +2292,7 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
     {
         if (phoneBox == null)
         {
-            phoneBox = new TextBox("Phone number, e.g. +1234567890",
+            phoneBox = new TextBox("Number, then Continue",
                                    "+", 20, TextField.PHONENUMBER);
             phoneBox.addCommand(cmdNext);
             phoneBox.addCommand(cmdLog);
@@ -2337,7 +2345,7 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
         // so nothing about the login flow has moved.
         if (!submitted)
         {
-            showRefused("No code requested", "Press Next again in a moment.");
+            showRefused("No code requested", "Press Continue again in a moment.");
         }
     }
 
@@ -2345,7 +2353,8 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
     {
         int digits = telegram.lastSentCodeLength();
         String title = "Code via " + telegram.lastSentCodeTypeName()
-                       + (digits > 0 ? (" (" + digits + " digits)") : "");
+                       + (digits > 0 ? (" (" + digits + " digits)") : "")
+                       + ", then Sign in";
         if (codeBox == null)
         {
             codeBox = new TextBox(title, "", 8, TextField.NUMERIC);
@@ -2543,7 +2552,7 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
 
     private void showPasswordBox(String hint)
     {
-        String title = "2FA password";
+        String title = "2FA password, then Check";
         if (hint != null && hint.length() > 0) { title += " (hint: " + hint + ")"; }
         passwordBox = new TextBox(title, "", 128,
                                   TextField.ANY | TextField.PASSWORD);
