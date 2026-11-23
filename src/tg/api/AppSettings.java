@@ -13,6 +13,12 @@ public final class AppSettings
     public boolean mediaPreviews = true;
 
     /**
+     * Ask the native bridge (Discofi Notify or ResyGram Notify) for a system
+     * note on new messages. Off means no loopback socket is ever opened.
+     */
+    public boolean notifications = true;
+
+    /**
      * Download avatars for the dialog list.
      *
      * Separate from {@link #mediaPreviews}, which only gates the stripped
@@ -46,6 +52,8 @@ public final class AppSettings
     {
         String value = store.loadString("ui.media.previews");
         mediaPreviews = value == null || !"0".equals(value);
+        value = store.loadString("ui.notify");
+        notifications = value == null || !"0".equals(value);
         value = store.loadString("ui.avatars");
         loadAvatars = value == null || !"0".equals(value);
         value = store.loadString("log.level");

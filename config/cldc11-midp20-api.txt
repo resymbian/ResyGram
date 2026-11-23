@@ -120,6 +120,12 @@ javax/microedition/io/ServerSocketConnection
 javax/microedition/io/SocketConnection
 javax/microedition/io/UDPDatagramConnection
 
+# JSR-75 is optional, so these are the one place this allowlist goes past the
+# MIDP 2.0 subset. tg.plat.FileStore is only loaded after
+# microedition.io.file.FileConnection.version answers, and every caller catches
+# Throwable, so a handset without JSR-75 still runs - it just cannot save a file.
+javax/microedition/io/file/FileConnection
+
 # ------------------------------------------------- javax.microedition.midlet
 javax/microedition/midlet/MIDlet
 javax/microedition/midlet/MIDletStateChangeException

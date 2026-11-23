@@ -25,7 +25,7 @@ public final class BusyScreen extends Canvas
 
     private final Theme theme;
     private final String title;
-    private final String text;
+    private String text;
     private final Font titleFont;
     private final Font textFont;
     private final Metrics metrics = new Metrics();
@@ -44,6 +44,13 @@ public final class BusyScreen extends Canvas
                                  Font.SIZE_MEDIUM);
         textFont = Font.getFont(Font.FACE_PROPORTIONAL, Font.STYLE_PLAIN,
                                 Font.SIZE_SMALL);
+    }
+
+    /** Update the line under the title, for a step whose size is now known. */
+    public void setText(String value)
+    {
+        text = value == null ? "" : value;
+        repaint();
     }
 
     /**

@@ -26,6 +26,7 @@ public final class Media
     public int kind;
     public String label;
     public PhotoRef photo;
+    public DocumentRef document;
     public Poll poll;
 
     public static Media from(TlObj obj)
@@ -63,7 +64,13 @@ public final class Media
                 classified = document(alternatives[i]);
                 if (classified != null) { return classified; }
             }
-            return simple(FILE, "[file]");
+            Media file = simple(FILE, "[file]");
+            file.document = DocumentRef.from(document);
+            if (file.document != null && file.document.fileName.length() > 0)
+            {
+                file.label = "[" + file.document.fileName + "]";
+            }
+            return file;
         }
         if (obj.id == Api.MESSAGE_MEDIA_GEO || obj.id == Api.MESSAGE_MEDIA_GEO_LIVE
                 || obj.id == Api.MESSAGE_MEDIA_VENUE)
@@ -98,6 +105,16 @@ public final class Media
     private static Media document(TlObj document)
     {
         if (document == null || document.id != Api.DOCUMENT) { return null; }
+        Media out = classify(document);
+        // Every classified document keeps its reference: a voice note, a video
+        // and a plain file all download through upload.getFile, and the UI can
+        // offer the same Open command for each of them.
+        if (out != null) { out.document = DocumentRef.from(document); }
+        return out;
+    }
+
+    private static Media classify(TlObj document)
+    {
         TlObj[] attrs = document.vec(Api.F_DOCUMENT__ATTRIBUTES);
         for (int i = 0; i < attrs.length; i++)
         {

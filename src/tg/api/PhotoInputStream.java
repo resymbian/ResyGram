@@ -24,9 +24,13 @@ public final class PhotoInputStream extends InputStream
 
     public static final int CHUNK = 32 * 1024;
 
+    /** Ceiling for a document whose advertised size is missing or wrong. */
+    public static final long MAX_DOCUMENT_BYTES = 32L * 1024 * 1024;
+
     private Source source;
     private final PhotoRef photo;
     private final PhotoSizeRef size;
+    private final DocumentRef document;
     private final Peer avatarPeer;
     private final AvatarRef avatar;
     private final DownloadToken token;
@@ -47,6 +51,7 @@ public final class PhotoInputStream extends InputStream
         this.source = source;
         this.photo = photo;
         this.size = size;
+        this.document = null;
         this.avatarPeer = null;
         this.avatar = null;
         this.token = token == null ? new DownloadToken() : token;
@@ -72,13 +77,32 @@ public final class PhotoInputStream extends InputStream
         this.source = source;
         this.photo = null;
         this.size = null;
+        this.document = null;
         this.avatarPeer = peer;
         this.avatar = avatar;
         this.token = token == null ? new DownloadToken() : token;
     }
 
+    /** A document stream: same chunking, no photo decoding assumptions. */
+    public PhotoInputStream(Source source, DocumentRef document,
+                            DownloadToken token)
+    {
+        this.source = source;
+        this.photo = null;
+        this.size = null;
+        this.document = document;
+        this.avatarPeer = null;
+        this.avatar = null;
+        this.token = token == null ? new DownloadToken() : token;
+    }
+
     public int bytesRead() { return (int) (offset - availableInChunk()); }
-    public int expectedBytes() { return size == null ? 0 : size.size; }
+
+    public int expectedBytes()
+    {
+        if (document != null) { return (int) Math.min(document.size, 0x7fffffffL); }
+        return size == null ? 0 : size.size;
+    }
 
     public int read() throws IOException
     {
@@ -112,14 +136,20 @@ public final class PhotoInputStream extends InputStream
     {
         checkCancelled();
         if (source == null) { eof = true; chunk = new byte[0]; return; }
-        if (offset >= MemoryBudget.photoCompressedBytes())
+        long limit = document != null
+                ? (document.size > 0 ? document.size : MAX_DOCUMENT_BYTES)
+                : MemoryBudget.photoCompressedBytes();
+        if (offset >= limit)
         {
-            throw new IOException("photo exceeds the "
-                    + MemoryBudget.photoCompressedBytes() + " byte download limit");
+            throw new IOException((document != null ? "document" : "photo")
+                    + " exceeds the " + limit + " byte download limit");
         }
-        byte[] query = avatar == null
-                ? Requests.getPhotoFile(photo, size, offset, CHUNK)
-                : Requests.getAvatarFile(avatarPeer, avatar, offset, CHUNK);
+        byte[] query = document != null
+                ? Requests.getDocumentFile(document, offset, CHUNK)
+                : (avatar == null
+                        ? Requests.getPhotoFile(photo, size, offset, CHUNK)
+                        : Requests.getAvatarFile(avatarPeer, avatar, offset,
+                                                 CHUNK));
         byte[] body = source.invoke(query);
         int constructor = new TlReader(body).readInt();
         if (constructor == Api.UPLOAD_FILE_CDN_REDIRECT)
@@ -139,18 +169,20 @@ public final class PhotoInputStream extends InputStream
         {
             throw new IOException("oversized upload.getFile chunk " + bytes.length);
         }
-        if (offset + bytes.length > MemoryBudget.photoCompressedBytes()
+        if (offset + bytes.length > limit
                 || (size != null && size.size > 0
                     && offset + bytes.length > size.size))
         {
-            throw new IOException("photo data exceeds advertised bound");
+            throw new IOException("file data exceeds advertised bound");
         }
         chunk = bytes;
         chunkAt = 0;
         offset += bytes.length;
         eof = bytes.length < CHUNK || (size != null && size.size > 0
-                && offset >= size.size);
-        token.progress((int) offset, size == null ? 0 : size.size);
+                && offset >= size.size)
+                || (document != null && document.size > 0
+                    && offset >= document.size);
+        token.progress((int) offset, expectedBytes());
     }
 
     private int availableInChunk()

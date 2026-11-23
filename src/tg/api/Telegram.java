@@ -3011,6 +3011,108 @@ public final class Telegram
                 photo, size, token);
     }
 
+    /**
+     * Open a one-shot stream for any document: a file, a video, a voice note.
+     *
+     * The caller writes it somewhere instead of decoding it, so there is no
+     * viewport argument and no decode budget: only the chunk size is bounded.
+     */
+    public PhotoInputStream openDocument(DocumentRef document,
+                                         DownloadToken token)
+            throws IOException
+    {
+        if (document == null || !document.downloadable())
+        {
+            throw new IOException("message has no downloadable file");
+        }
+        return new PhotoInputStream(openMediaSource(document.dcId, true),
+                document, token);
+    }
+
+    /** Progress of an upload, in bytes already acknowledged by the server. */
+    public interface UploadListener
+    {
+        void onProgress(int sent, int total);
+    }
+
+    /**
+     * Stream a file up with upload.saveFilePart and return its handle.
+     *
+     * The file is read in the same 32 KiB chunks the download path uses: a
+     * whole photo or song is never held in the handset's heap. Above 10 MB the
+     * server only accepts saveBigFilePart, which is why the threshold is not a
+     * preference.
+     */
+    public UploadedFile upload(java.io.InputStream in, int length, String name,
+                               String mime, UploadListener listener)
+            throws IOException
+    {
+        if (in == null || length <= 0)
+        {
+            throw new IOException("the selected file is empty");
+        }
+        if (length > PhotoInputStream.MAX_DOCUMENT_BYTES)
+        {
+            throw new IOException("files above "
+                    + (PhotoInputStream.MAX_DOCUMENT_BYTES / (1024 * 1024))
+                    + " MB are not uploaded from this handset");
+        }
+        int parts = (length + PhotoInputStream.CHUNK - 1)
+                / PhotoInputStream.CHUNK;
+        boolean big = length > 10 * 1024 * 1024;
+        long fileId = rng.nextLong() & 0x7fffffffffffffffL;
+        byte[] buffer = new byte[PhotoInputStream.CHUNK];
+
+        for (int part = 0; part < parts; part++)
+        {
+            int want = Math.min(PhotoInputStream.CHUNK,
+                    length - part * PhotoInputStream.CHUNK);
+            int read = 0;
+            while (read < want)
+            {
+                int n = in.read(buffer, read, want - read);
+                if (n < 0)
+                {
+                    throw new IOException("file ended at " + (part * PhotoInputStream.CHUNK + read)
+                            + " of " + length + " bytes");
+                }
+                read += n;
+            }
+            TlObj result = TlParser.parse(new TlReader(invoke(
+                    Requests.saveFilePart(fileId, part, parts, buffer, want,
+                            big))));
+            if (result == null || result.id != Api.BOOL_TRUE)
+            {
+                throw new IOException("upload.saveFilePart " + part + " of "
+                        + parts + " was refused");
+            }
+            if (listener != null)
+            {
+                listener.onProgress((part + 1) * PhotoInputStream.CHUNK,
+                        length);
+            }
+        }
+        return new UploadedFile(fileId, parts, name, mime, big);
+    }
+
+    /** Send an uploaded photo or file as a message in {@code peer}. */
+    public void sendMedia(Peer peer, String caption, UploadedFile file,
+                          boolean asDocument) throws IOException
+    {
+        if (!peers.isAddressable(peer))
+        {
+            throw new IOException("cannot address " + peer
+                    + " - no access_hash. Refresh the dialog list.");
+        }
+        if (file == null)
+        {
+            throw new IOException("nothing was uploaded");
+        }
+        updates.acceptRpc(invoke(Requests.sendMedia(peer,
+                caption == null ? "" : caption, rng.nextLong(), file,
+                asDocument)));
+    }
+
     /** Open the compact current avatar attached to a dialog peer. */
     public PhotoInputStream openAvatar(Peer peer, DownloadToken token)
             throws IOException

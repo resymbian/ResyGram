@@ -1251,6 +1251,97 @@ public final class Requests
     }
 
     /**
+     * upload.getFile for a document through inputDocumentFileLocation.
+     *
+     * thumb_size is the empty string: the full file, not a preview. The same
+     * 32 KiB chunks as photos, because the server caps a bytes field and the
+     * handset caps the heap the chunk is copied into.
+     */
+    public static byte[] getDocumentFile(DocumentRef document, long offset,
+                                         int limit)
+    {
+        if (document == null)
+        {
+            throw new IllegalArgumentException("document is required");
+        }
+        TlWriter w = new TlWriter(96
+                + (document.fileReference == null
+                    ? 0 : document.fileReference.length));
+        w.writeInt(Api.UPLOAD_GET_FILE);
+        w.writeInt(0);                      // precise=false, cdn_supported=false
+        w.writeInt(Api.INPUT_DOCUMENT_FILE_LOCATION);
+        w.writeLong(document.id);
+        w.writeLong(document.accessHash);
+        w.writeBytes(document.fileReference == null
+                ? new byte[0] : document.fileReference);
+        w.writeString("");                  // thumb_size: the whole file
+        w.writeLong(offset);
+        w.writeInt(limit);
+        return w.toByteArray();
+    }
+
+    /** upload.saveFilePart (or saveBigFilePart above the 10 MB threshold). */
+    public static byte[] saveFilePart(long fileId, int part, int totalParts,
+                                      byte[] bytes, int length, boolean big)
+    {
+        TlWriter w = new TlWriter(length + 32);
+        w.writeInt(big ? Api.UPLOAD_SAVE_BIG_FILE_PART
+                       : Api.UPLOAD_SAVE_FILE_PART);
+        w.writeLong(fileId);
+        w.writeInt(part);
+        if (big) { w.writeInt(totalParts); }
+        w.writeBytes(bytes, 0, length);
+        return w.toByteArray();
+    }
+
+    /**
+     * messages.sendMedia carrying an upload that just finished.
+     *
+     * A photo goes as inputMediaUploadedPhoto so Telegram renders it inline; a
+     * file goes as inputMediaUploadedDocument with only its filename attribute,
+     * which is what makes it arrive as a document and not as a broken image.
+     */
+    public static byte[] sendMedia(Peer peer, String caption, long randomId,
+                                   UploadedFile file, boolean asDocument)
+    {
+        TlWriter w = new TlWriter(192 + caption.length() * 2
+                + file.name.length() * 2);
+        w.writeInt(Api.MESSAGES_SEND_MEDIA);
+        w.writeInt(0);                      // silent, background, no reply
+        writeInputPeer(w, peer);
+        writeInputMedia(w, file, asDocument);
+        w.writeString(caption == null ? "" : caption);
+        w.writeLong(randomId);
+        return w.toByteArray();
+    }
+
+    private static void writeInputMedia(TlWriter w, UploadedFile file,
+                                        boolean asDocument)
+    {
+        w.writeInt(asDocument ? Api.INPUT_MEDIA_UPLOADED_DOCUMENT
+                              : Api.INPUT_MEDIA_UPLOADED_PHOTO);
+        w.writeInt(0);                      // flags: no thumb, no spoiler
+        writeInputFile(w, file);
+        if (asDocument)
+        {
+            w.writeString(file.mimeType == null ? "" : file.mimeType);
+            w.writeInt(0x1cb5c415);         // vector
+            w.writeInt(1);
+            w.writeInt(Api.DOCUMENT_ATTRIBUTE_FILENAME);
+            w.writeString(file.name);
+        }
+    }
+
+    private static void writeInputFile(TlWriter w, UploadedFile file)
+    {
+        w.writeInt(file.big ? Api.INPUT_FILE_BIG : Api.INPUT_FILE);
+        w.writeLong(file.id);
+        w.writeInt(file.parts);
+        w.writeString(file.name);
+        if (!file.big) { w.writeString(""); }   // md5_checksum: not sent
+    }
+
+    /**
      * Small current peer avatar through inputPeerPhotoFileLocation.
      *
      * big=false deliberately asks Telegram for the compact list thumbnail.

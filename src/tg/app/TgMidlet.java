@@ -24,6 +24,7 @@ import tg.api.ChatDefaultPermissions;
 import tg.api.ChatParticipant;
 import tg.api.ChatParticipantPage;
 import tg.api.Dialog;
+import tg.api.DocumentRef;
 import tg.api.DialogPage;
 import tg.api.DialogFilterDefinition;
 import tg.api.DialogFolderMatcher;
@@ -50,6 +51,7 @@ import tg.api.ReactionSummary;
 import tg.api.ReactionActor;
 import tg.api.ReactionActorsPage;
 import tg.api.Media;
+import tg.api.UploadedFile;
 import tg.api.DownloadToken;
 import tg.api.PhotoInputStream;
 import tg.api.PhotoRef;
@@ -79,6 +81,8 @@ import tg.mt.Dc;
 import tg.mt.ConnectionConfig;
 import tg.mt.ConnectionDiagnostics;
 import tg.mt.RpcError;
+import tg.plat.FileStore;
+import tg.plat.Notifier;
 import tg.plat.MidpLinkFactory;
 import tg.plat.RmsAuthKeyStore;
 import tg.plat.RmsCheck;
@@ -104,6 +108,7 @@ import tg.ui.TouchContextListener;
 import tg.ui.TopicListScreen;
 import tg.ui.PhotoScreen;
 import tg.ui.ParticipantListScreen;
+import tg.ui.FilePickerScreen;
 import tg.ui.PollScreen;
 import tg.ui.ImageScaler;
 import tg.ui.JpegDecoder;
@@ -190,6 +195,13 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
             new Command("Cancel", Command.CANCEL, 1);
     private final Command cmdRefresh = new Command("Refresh", Command.SCREEN, 3);
     private final Command cmdWrite   = new Command("Write", Command.SCREEN, 1);
+    private final Command cmdOpenMedia =
+            new Command("Open media", Command.SCREEN, 2);
+    private final Command cmdSendPhoto =
+            new Command("Send photo", Command.SCREEN, 2);
+    private final Command cmdSendFile =
+            new Command("Send file", Command.SCREEN, 3);
+    private final Command cmdPickerUp = new Command("Up", Command.BACK, 2);
     /** The composer's emoji picker: the keypad cannot type one. */
     private final Command cmdEmoji   = new Command("Emoji", Command.SCREEN, 3);
     private final Command cmdSend    = new Command("Send", Command.SCREEN, 1);
@@ -202,6 +214,8 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
     private final Command cmdRetryWipe =
             new Command("Retry cleanup", Command.SCREEN, 1);
     private final Command cmdSettings = new Command("Settings", Command.SCREEN, 8);
+    private final Command cmdTestNotify =
+            new Command("Test notification", Command.SCREEN, 11);
     private final Command cmdLogOut  = new Command("Log out", Command.SCREEN, 9);
     private final Command cmdLogOutEverywhere =
             new Command("Log out everywhere", Command.SCREEN, 10);
@@ -474,6 +488,8 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
     private String[] reactionPalette = ReactionCatalog.EMOJI;
     private String[] reactionLabels = ReactionCatalog.LABELS;
     private PhotoScreen photoScreen;
+    private FilePickerScreen filePickerScreen;
+    private boolean pickerForPhoto;
     private DownloadToken photoToken;
     private Message photoMessage;
     private boolean photoReferenceExpired;
@@ -1471,6 +1487,28 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
             // reply state an earlier composer had left behind.
             openComposer(ComposerState.write(openPeer, openThreadId()));
         }
+        else if (c == cmdOpenMedia)
+        {
+            openFocusedMedia();
+        }
+        else if (c == cmdSendPhoto || c == cmdSendFile)
+        {
+            pickFileForSending(c == cmdSendPhoto);
+        }
+        else if (c == cmdPickerUp && d == filePickerScreen)
+        {
+            filePickerScreen.up();
+        }
+        else if ((c == List.SELECT_COMMAND || c == cmdOpen)
+                && d == filePickerScreen)
+        {
+            filePickerScreen.activate();
+        }
+        else if (c == cmdBack && d == filePickerScreen)
+        {
+            filePickerScreen = null;
+            restoreScreen(navigation.pop());
+        }
         else if (c == cmdJumpLatest)
         {
             jumpToLatest();
@@ -1921,6 +1959,10 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
             {
                 ((TextScreen) d).setLines(crashLogLines());
             }
+        }
+        else if (c == cmdTestNotify)
+        {
+            testNotification();
         }
         else if (c == cmdSettings)
         {
@@ -3164,6 +3206,7 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
             dialogList.addCommand(cmdDiag);
             dialogList.addCommand(cmdCrashLog);
             dialogList.addCommand(cmdSettings);
+            dialogList.addCommand(cmdTestNotify);
             dialogList.addCommand(cmdOutbox);
             dialogList.addCommand(cmdReconnect);
             dialogList.addCommand(cmdLog);
@@ -7072,10 +7115,11 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
         screen.setFullscreen(true);
         screen.setSoftKeys(cmdWrite, new Command[]
         {
-            cmdBack, cmdReply, cmdForward, cmdReactions, cmdViewFullText,
-            cmdEntityActions, cmdDeleteMessage, cmdFindMessages, cmdOlder,
-            cmdJumpLatest, cmdFirstUnread, cmdMarkAllRead, cmdChatInfo,
-            cmdProfile, cmdRefresh, cmdOutbox, cmdReconnect, cmdLog
+            cmdBack, cmdReply, cmdForward, cmdOpenMedia, cmdSendPhoto,
+            cmdSendFile, cmdReactions, cmdViewFullText, cmdEntityActions,
+            cmdDeleteMessage, cmdFindMessages, cmdOlder, cmdJumpLatest,
+            cmdFirstUnread, cmdMarkAllRead, cmdChatInfo, cmdProfile,
+            cmdRefresh, cmdOutbox, cmdReconnect, cmdLog
         });
         screen.setCommandListener(this);
         screen.setTouchContextListener(touchContextListener);
@@ -7095,6 +7139,11 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
                         && message.media.poll != null)
                 {
                     showPoll(messageId);
+                }
+                else if (message != null && message.media != null
+                        && message.media.document != null)
+                {
+                    downloadDocument(message.media.document);
                 }
                 else { showReactionPalette(messageId); }
             }
@@ -8113,6 +8162,111 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
 
     // -------------------------------------------------------- live updates
 
+    /**
+     * Ask the native bridge for one system note per batch of arrivals.
+     *
+     * A message in the conversation on screen is already visible, so it is not
+     * news; everything else is folded into one note ("Ada" or "3 new messages")
+     * because a burst of five notes would take the screen hostage. The work is
+     * handed to Notifier, which owns the socket and its own thread: this runs on
+     * the display thread.
+     */
+    private void notifyNewMessages(Message[] messages)
+    {
+        if (messages == null || messages.length == 0
+                || !appSettings.notifications)
+        {
+            return;
+        }
+        String title = null;
+        String first = null;
+        int count = 0;
+        for (int i = 0; i < messages.length; i++)
+        {
+            Message message = messages[i];
+            if (message == null || message.outgoing || message.service)
+            {
+                continue;
+            }
+            if (chatScreen != null && display.getCurrent() == chatScreen
+                    && belongsToOpenThread(message))
+            {
+                continue;
+            }
+            count++;
+            if (title == null)
+            {
+                title = message.peer == null ? null : message.peer.title;
+            }
+            if (first == null)
+            {
+                String sender = message.senderName();
+                first = sender.length() == 0
+                        ? message.summaryText()
+                        : sender + ": " + message.summaryText();
+            }
+        }
+        if (count == 0) { return; }
+        Notifier.post(title == null || title.length() == 0 ? "ResyGram" : title,
+                count == 1 ? first : count + " new messages");
+    }
+
+    /** Prove the loopback bridge is installed, from the chat list menu. */
+    private void testNotification()
+    {
+        final AsyncScope.Token asked = scope.capture();
+        showBusy("Notifications", "Asking the bridge on 127.0.0.1:4711...");
+        boolean submitted = worker.submit(new Worker.Task()
+        {
+            public String name() { return "notify.test"; }
+
+            public Object run() throws Exception
+            {
+                return Notifier.deliver("ResyGram",
+                        "Test notification: the bridge is working.");
+            }
+        }, new Worker.Callback()
+        {
+            public void onSuccess(Object result)
+            {
+                if (!asked.sameSession() || dialogList == null)
+                {
+                    dropStale("notify.test");
+                    return;
+                }
+                restoreScreen(navigation.current());
+                String error = (String) result;
+                if (error == null)
+                {
+                    showAlert("The bridge displayed the note.", AlertType.INFO,
+                            dialogList);
+                }
+                else
+                {
+                    showAlert(error + "\nInstall ResyGram Notify (or Discofi "
+                            + "Notify), start it once, and try again.",
+                            AlertType.INFO, dialogList);
+                }
+            }
+
+            public void onFailure(Throwable error)
+            {
+                if (!asked.sameSession() || dialogList == null)
+                {
+                    dropStale("notify.test");
+                    return;
+                }
+                restoreScreen(dialogList);
+                showAlertThen("Notification failed", error, dialogList);
+            }
+        });
+        if (!submitted)
+        {
+            restoreScreen(dialogList);
+            showRefused("Not tested", "Try again in a moment.", dialogList);
+        }
+    }
+
     private void applyUpdateBatch(UpdateBatch batch)
     {
         if (batch == null) { return; }
@@ -8150,6 +8304,7 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
             if (!mergeMessage(batch.messages[i])) { refresh = true; }
             mergeTopicRow(batch.messages[i]);
         }
+        notifyNewMessages(batch.messages);
         for (int i = 0; i < batch.edits.length; i++)
         {
             applyEditedMessage(batch.edits[i]);
@@ -11944,6 +12099,306 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
             showRefused("Reaction not sent",
                     "Open Reactions and choose again in a moment.", chatScreen);
         }
+    }
+
+    /**
+     * Download the document under the focus and hand it to the phone's viewer.
+     *
+     * The phone, not this MIDlet, decides what can display a PDF or a video: the
+     * file is written to the downloads folder and platformRequest() launches the
+     * associated application. What lands here is the file itself, so a failed
+     * download says so instead of opening a truncated copy.
+     */
+    private void downloadDocument(final DocumentRef document)
+    {
+        if (document == null || !document.downloadable())
+        {
+            showAlert("This message has no downloadable file.",
+                    AlertType.INFO, chatScreen);
+            return;
+        }
+        if (!FileStore.available())
+        {
+            showAlert("This phone has no file system API, so files cannot be "
+                    + "saved. Photos still open in the viewer.",
+                    AlertType.INFO, chatScreen);
+            return;
+        }
+        final BusyScreen busy = new BusyScreen(currentTheme(), "Downloading",
+                document.fileName + "  " + FileStore.humanSize(
+                        (int) Math.min(document.size, 0x7fffffffL)));
+        busy.addCommand(cmdLog);
+        busy.addCommand(cmdExit);
+        busy.setCommandListener(this);
+        display.setCurrent(busy);
+
+        final DownloadToken token = new DownloadToken();
+        final AsyncScope.Token asked = scope.capture();
+        boolean submitted = worker.submit(new Worker.Task()
+        {
+            public String name() { return "upload.getFile/document"; }
+
+            public Object run() throws Exception
+            {
+                PhotoInputStream in = telegram.openDocument(document, token);
+                try
+                {
+                    int total = in.expectedBytes();
+                    return FileStore.save(FileStore.downloadsDir(),
+                            document.fileName, in, total,
+                            new FileStore.Progress()
+                            {
+                                public void onProgress(final int written,
+                                                       final int totalBytes)
+                                {
+                                    ui.post(new Runnable()
+                                    {
+                                        public void run()
+                                        {
+                                            if (token.isCancelled()) { return; }
+                                            String total = totalBytes > 0
+                                                    ? " / " + totalBytes : "";
+                                            busy.setText(written + total
+                                                    + " bytes");
+                                        }
+                                    });
+                                }
+                            });
+                }
+                finally { in.close(); }
+            }
+        }, new Worker.Callback()
+        {
+            public void onSuccess(Object result)
+            {
+                if (!asked.sameSession() || chatScreen == null)
+                {
+                    dropStale("upload.getFile/document");
+                    return;
+                }
+                restoreScreen(chatScreen);
+                openSavedFile(String.valueOf(result));
+            }
+
+            public void onFailure(Throwable error)
+            {
+                if (!asked.sameSession() || chatScreen == null)
+                {
+                    dropStale("upload.getFile/document");
+                    return;
+                }
+                restoreScreen(chatScreen);
+                String message = shortMessage(error);
+                if (message != null && message.indexOf("FILE_REFERENCE") >= 0)
+                {
+                    chatScreen.setStatus("reference expired; reopen the chat");
+                    showAlert("The download link expired. Refresh the chat and "
+                            + "open the file again.", AlertType.INFO,
+                            chatScreen);
+                }
+                else
+                {
+                    showAlertThen("Download failed", error, chatScreen);
+                }
+            }
+        });
+        if (!submitted)
+        {
+            restoreScreen(chatScreen);
+            showRefused("Not downloaded", "Press Open media again in a moment.",
+                    chatScreen);
+        }
+    }
+
+    /** Hand a saved file to the phone; the viewer may replace this MIDlet. */
+    private void openSavedFile(String url)
+    {
+        try
+        {
+            if (platformRequest(url))
+            {
+                destroyApp(false);
+                notifyDestroyed();
+                return;
+            }
+            showAlert("Saved to " + url, AlertType.INFO, chatScreen);
+        }
+        catch (Throwable refused)
+        {
+            // Not an error the user caused: some handsets simply have no
+            // association for the type. The path is the useful half.
+            showAlert("Saved to " + url + "\nThe phone has no application "
+                    + "registered for this file type.", AlertType.INFO,
+                    chatScreen);
+        }
+    }
+
+    /** The chat menu's Open media: decide from the focused message. */
+    private void openFocusedMedia()
+    {
+        if (chatScreen == null) { return; }
+        Message message = findOpenMessage(chatScreen.focusedMessageId());
+        if (message == null || message.media == null)
+        {
+            showAlert("Select a photo or a file first.", AlertType.INFO,
+                    chatScreen);
+            return;
+        }
+        if (message.media.kind == Media.PHOTO && message.media.photo != null)
+        {
+            profilePhoto = false;
+            openPhoto(message);
+            return;
+        }
+        if (message.media.document != null)
+        {
+            downloadDocument(message.media.document);
+            return;
+        }
+        showAlert("This message carries nothing to download.", AlertType.INFO,
+                chatScreen);
+    }
+
+    /** Browse the phone for a file to send, starting in the Images folder. */
+    private void pickFileForSending(final boolean photo)
+    {
+        if (openPeer == null) { return; }
+        if (!FileStore.available())
+        {
+            showAlert("This phone has no file system API, so there is nothing "
+                    + "to browse.", AlertType.INFO, chatScreen);
+            return;
+        }
+        pickerForPhoto = photo;
+        filePickerScreen = new FilePickerScreen(FileStore.photosDir(),
+                new FilePickerScreen.Listener()
+        {
+            public void onFileSelected(String url, String name, int size)
+            {
+                sendFileFromPhone(url, name, size, pickerForPhoto);
+            }
+        });
+        filePickerScreen.setTitle(photo ? "Send a photo" : "Send a file");
+        filePickerScreen.addCommand(cmdPickerUp);
+        filePickerScreen.addCommand(cmdBack);
+        filePickerScreen.setSelectCommand(List.SELECT_COMMAND);
+        filePickerScreen.setCommandListener(this);
+        filePickerScreen.reload();
+        pushScreen(filePickerScreen);
+    }
+
+    /** Read the picked file, upload it in chunks and send it as a message. */
+    private void sendFileFromPhone(final String url, final String name,
+                                   final int size, boolean photo)
+    {
+        final Peer peer = openPeer;
+        if (peer == null || url == null) { return; }
+        filePickerScreen = null;
+        final boolean asDocument = !photo || !isImageFile(name);
+        final String mime = mimeType(name);
+        final BusyScreen busy = new BusyScreen(currentTheme(), "Sending",
+                "Uploading " + name + "...");
+        busy.addCommand(cmdLog);
+        busy.addCommand(cmdExit);
+        busy.setCommandListener(this);
+        display.setCurrent(busy);
+
+        final AsyncScope.Token asked = scope.capture();
+        boolean submitted = worker.submit(new Worker.Task()
+        {
+            public String name() { return "upload.saveFilePart"; }
+
+            public Object run() throws Exception
+            {
+                java.io.InputStream in = FileStore.open(url);
+                try
+                {
+                    UploadedFile uploaded = telegram.upload(in, size, name,
+                            mime,
+                            new Telegram.UploadListener()
+                            {
+                                public void onProgress(final int sent,
+                                                       final int total)
+                                {
+                                    ui.post(new Runnable()
+                                    {
+                                        public void run()
+                                        {
+                                            busy.setText(sent + " / " + total
+                                                    + " bytes");
+                                        }
+                                    });
+                                }
+                            });
+                    telegram.sendMedia(peer, "", uploaded, asDocument);
+                    return null;
+                }
+                finally { in.close(); }
+            }
+        }, new Worker.Callback()
+        {
+            public void onSuccess(Object result)
+            {
+                if (!asked.sameSession() || chatScreen == null)
+                {
+                    dropStale("upload.saveFilePart");
+                    return;
+                }
+                restoreScreen(chatScreen);
+                chatScreen.setStatus("sent " + name);
+            }
+
+            public void onFailure(Throwable error)
+            {
+                if (!asked.sameSession() || chatScreen == null)
+                {
+                    dropStale("upload.saveFilePart");
+                    return;
+                }
+                restoreScreen(chatScreen);
+                showAlertThen("Send failed", error, chatScreen);
+            }
+        });
+        if (!submitted)
+        {
+            restoreScreen(chatScreen);
+            showRefused("Not uploaded", "Press Send file again in a moment.",
+                    chatScreen);
+        }
+    }
+
+    private static boolean isImageFile(String name)
+    {
+        String lower = name == null ? "" : name.toLowerCase();
+        return lower.endsWith(".jpg") || lower.endsWith(".jpeg")
+                || lower.endsWith(".png") || lower.endsWith(".gif")
+                || lower.endsWith(".bmp");
+    }
+
+    private static String mimeType(String name)
+    {
+        String lower = name == null ? "" : name.toLowerCase();
+        if (lower.endsWith(".jpg") || lower.endsWith(".jpeg"))
+        {
+            return "image/jpeg";
+        }
+        if (lower.endsWith(".png")) { return "image/png"; }
+        if (lower.endsWith(".gif")) { return "image/gif"; }
+        if (lower.endsWith(".bmp")) { return "image/bmp"; }
+        if (lower.endsWith(".mp3")) { return "audio/mpeg"; }
+        if (lower.endsWith(".amr")) { return "audio/amr"; }
+        if (lower.endsWith(".aac") || lower.endsWith(".m4a"))
+        {
+            return "audio/aac";
+        }
+        if (lower.endsWith(".mp4") || lower.endsWith(".3gp"))
+        {
+            return "video/mp4";
+        }
+        if (lower.endsWith(".pdf")) { return "application/pdf"; }
+        if (lower.endsWith(".txt")) { return "text/plain"; }
+        if (lower.endsWith(".zip")) { return "application/zip"; }
+        return "application/octet-stream";
     }
 
     private void openPhoto(final Message message)

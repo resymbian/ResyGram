@@ -42,10 +42,17 @@ would keep open:
 - [x] Telegram-style chat bubbles, and the conversation in full screen with its
       own two-key bar: the right key composes, the left opens the drawn menu that
       replaces the AMS's command list
-- [ ] Attachments: thumbnails, download, open with the phone's own viewer
-- [ ] Search and join channels, groups and people
-- [ ] Upload files and photos from the phone
-- [ ] Background delivery with a notification, without draining the battery
+- [x] Attachments: a document or video under the focus downloads to the phone's
+      downloads folder in 32 KiB chunks and is handed to the phone's own viewer
+      with `platformRequest`; photos keep the in-app viewer and zoom
+- [x] Search and join channels, groups and people: `contacts.search`, opening a
+      result you are not in, and Join on its chat info
+- [x] Upload photos and files from the phone: a folder browser over JSR-75, then
+      `upload.saveFilePart` in 32 KiB chunks (`saveBigFilePart` above 10 MB) and
+      `messages.sendMedia`, with the byte count on the progress bar
+- [x] Background delivery with a native note, through the loopback bridge
+      (`socket://127.0.0.1:4711`) shared with Discofi; off in Settings, and a
+      Test notification entry proves the bridge is installed
 - [x] A loading bar, not a dot ring: the splash and every blocking step
       (connect, sign-in, sending) sweep a progress bar so the wait reads as a
       process. The busy screen starts on `showNotify` and stops on `hideNotify`,
@@ -81,6 +88,16 @@ Copy `ResyGram-<version>.jar` and its matching `.jad` into the same folder on th
 phone (USB, Bluetooth, memory card) and open the `.jad`; if the handset refuses
 it, open the `.jar` instead. The `.jad` records the exact size of its `.jar`, so
 do not rename either file.
+
+Files need JSR-75: the JAD declares the file read/write permissions, and the
+build compiles against a stub of the optional `FileConnection` interface. A
+handset without JSR-75 still runs; saving and browsing then say so instead of
+failing silently.
+
+System notes need the companion native bridge (DiscofiNotify.sisx, built from
+the Discofi tree with the S60 SDK in Docker). It listens on loopback only, shows
+an Avkon global note and answers one byte. With it absent, notifications are
+silently skipped - the client never depends on it.
 
 In **Settings → Mode**, `Auto` reaches Telegram directly: 443 first, then 5222
 when the handset's security policy refuses privileged ports. Leave MTProxy and

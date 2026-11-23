@@ -190,6 +190,11 @@ $MicroEmuSwing = Join-Path $SdkDir "microemu-javase-swing-2.0.4.jar"
 $MicroEmuInject= Join-Path $SdkDir "microemu-injected-2.0.4.jar"
 $Asm           = Join-Path $SdkDir "asm-3.1.jar"
 
+# JSR-75 FileConnection compile-time stub. Optional package: not in CLDC/MIDP,
+# but tg.plat.FileStore is written against it and the handset has the real one.
+# Boot classpath only - ProGuard never packages a library class.
+$Jsr75Stub     = Join-Path $RepoRoot "build/jsr75-stub.jar"
+
 # Order is load-bearing, twice over:
 #   - microemu-injected MUST come after microemu-javase. MicroEmulator checks
 #     this at startup and refuses with "Wrong Injected class detected".
@@ -218,10 +223,11 @@ function Get-DeviceBootClassPath {
         $wtkLib = Join-Path $WtkHome "lib"
         return @(
             (Join-Path $wtkLib "cldcapi11.jar"),
-            (Join-Path $wtkLib "midpapi20.jar")
+            (Join-Path $wtkLib "midpapi20.jar"),
+            $Jsr75Stub
         ) -join $PathSep
     }
-    return @($MicroEmuCldc, $MicroEmuMidp, $Jdk8RtJar) -join $PathSep
+    return @($MicroEmuCldc, $MicroEmuMidp, $Jdk8RtJar, $Jsr75Stub) -join $PathSep
 }
 
 function Get-BootClassPathMode {

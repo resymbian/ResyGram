@@ -78,6 +78,9 @@ updates.getChannelDifference
 
 # --- media, for viewing a photo ---
 upload.getFile
+# Sending a photo or a file: the parts go up first, then sendMedia.
+upload.saveFilePart
+upload.saveBigFilePart
 
 # --- reactions ---
 messages.sendReaction
@@ -454,8 +457,14 @@ messageMediaDocument.voice
 messageMediaDocument.document
 messageMediaDocument.alt_documents
 
+document.id
+document.access_hash
+document.file_reference
+document.size
+document.dc_id
 document.mime_type
 document.attributes
+documentAttributeFilename.file_name
 documentAttributeAudio.voice
 documentAttributeVideo.round_message
 

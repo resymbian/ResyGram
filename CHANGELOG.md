@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- View and save attachments: documents, videos and voice notes download in
+  bounded chunks to the phone's downloads folder and open in the phone's viewer;
+  photos keep the in-app viewer.
+- Send photos and files from the phone: a JSR-75 folder browser, chunked
+  `upload.saveFilePart`/`saveBigFilePart`, then `messages.sendMedia`.
+- Notifications through the native loopback bridge on 127.0.0.1:4711, with a
+  Settings switch and a Test notification entry. New arrivals outside the open
+  conversation are folded into one system note.
+- A compile-time JSR-75 stub so the optional package can be used without adding
+  it to the artifact, and file read/write permissions in the JAD.
+
+
 ## 1.6.0
 
 ### Added

@@ -400,6 +400,28 @@ function Assert-NoUnembeddedSecrets ($jarPath) {
 }
 
 # ==========================================================================
+# JSR-75 compile-time stub
+# ==========================================================================
+# The boot classpath has CLDC and MIDP only; FileConnection is an optional
+# package and the handset is the only place it exists. Compiling FileStore
+# against a stub keeps the artifact free of it. Built once per checkout, into
+# build/, so nothing generated lands in the repository.
+function Write-Jsr75Stub {
+    $stubJar = Join-Path $RepoRoot "build/jsr75-stub.jar"
+    if (Test-Path $stubJar) { return }
+    $source = Join-Path $RepoRoot "third_party/jsr75-stub/FileConnection.java"
+    $classes = Join-Path $RepoRoot "build/jsr75-stub-classes"
+    New-Item -ItemType Directory -Force -Path $classes | Out-Null
+    Invoke-Checked $Jdk8Javac @(
+        "-source", "1.3", "-target", "1.1", "-nowarn",
+        "-encoding", "UTF-8", "-d", $classes, $source
+    ) "javac (jsr75 stub)" | Out-Null
+    Invoke-Checked $Jdk8Jar @("cf", $stubJar, "-C", $classes, ".") "jar (jsr75 stub)" | Out-Null
+}
+
+Write-Jsr75Stub
+
+# ==========================================================================
 # desktop profile
 # ==========================================================================
 if ($BuildProfile -eq 'desktop') {
@@ -644,6 +666,7 @@ $manifest = Join-Path $buildDir "MANIFEST.MF"# MIDlet-Icon names the PNG that th
 # declares, while S60's application grid takes the picture from the icon field
 # of MIDlet-1. With that field empty the app installs and runs - the splash and
 # the in-app header show the icon - but the launcher lists it as a blank box.
+
 # MIDlet-Permissions-Opt is what an unsigned MIDlet has to declare before the
 # handset will even offer the connection as a user permission: on S60 3rd,
 # without it, there is no permission entry in Application manager and the
@@ -656,7 +679,7 @@ MIDlet-Version: $AppVersion
 MIDlet-Vendor: $AppVendor
 MIDlet-1: $MidletName,/icon.png,$MidletClass
 MIDlet-Icon: /icon.png
-MIDlet-Permissions-Opt: javax.microedition.io.Connector.socket, javax.microedition.io.Connector.http
+MIDlet-Permissions-Opt: javax.microedition.io.Connector.socket, javax.microedition.io.Connector.http, javax.microedition.io.Connector.file.read, javax.microedition.io.Connector.file.write
 MicroEdition-Profile: MIDP-2.0
 MicroEdition-Configuration: CLDC-1.1
 "@ -replace "`r`n", "`n" | Set-Content -Path $manifest -Encoding ASCII -NoNewline
@@ -697,7 +720,7 @@ MIDlet-Version: $AppVersion
 MIDlet-Vendor: $AppVendor
 MIDlet-1: $MidletName,/icon.png,$MidletClass
 MIDlet-Icon: /icon.png
-MIDlet-Permissions-Opt: javax.microedition.io.Connector.socket, javax.microedition.io.Connector.http
+MIDlet-Permissions-Opt: javax.microedition.io.Connector.socket, javax.microedition.io.Connector.http, javax.microedition.io.Connector.file.read, javax.microedition.io.Connector.file.write
 MicroEdition-Profile: MIDP-2.0
 MicroEdition-Configuration: CLDC-1.1
 MIDlet-Jar-URL: $ArtifactName.jar

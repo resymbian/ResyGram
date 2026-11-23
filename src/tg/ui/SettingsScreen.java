@@ -26,6 +26,7 @@ public final class SettingsScreen extends Form
     private final ChoiceGroup singleSocket;
     private final ChoiceGroup loadAvatars;
     private final ChoiceGroup mediaPreviews;
+    private final ChoiceGroup notifications;
     private final ChoiceGroup theme;
     private final ChoiceGroup logLevel;
     private final ChoiceGroup remoteLog;
@@ -53,6 +54,9 @@ public final class SettingsScreen extends Form
         mediaPreviews = new ChoiceGroup("Media previews", Choice.EXCLUSIVE,
                 new String[] { "Inline stripped thumbnail", "Text only" }, null);
         mediaPreviews.setSelectedIndex(app.mediaPreviews ? 0 : 1, true);
+        notifications = new ChoiceGroup("Notifications", Choice.MULTIPLE,
+                new String[] { "Show a system note for new messages" }, null);
+        notifications.setSelectedIndex(0, app.notifications);
         theme = new ChoiceGroup("Theme", Choice.EXCLUSIVE, Theme.names(), null);
         theme.setSelectedIndex(Theme.isValid(app.themeId)
                 ? app.themeId : Theme.LIGHT, true);
@@ -81,6 +85,10 @@ public final class SettingsScreen extends Form
              + "open two at once this breaks the one in use, and a chat opens "
              + "empty. Turn Off if that happens.");
         append(mediaPreviews);
+        append(notifications);
+        append("A note needs the native bridge listening on 127.0.0.1:4711 "
+             + "(ResyGram Notify, or Discofi Notify). Without it nothing is sent "
+             + "and nothing fails.");
         append(theme);
         append(logLevel);
         append(remoteLog);
@@ -147,6 +155,7 @@ public final class SettingsScreen extends Form
         config.singleSocket = singleSocket.isSelected(0);
         app.loadAvatars = loadAvatars.getSelectedIndex() == 0;
         app.mediaPreviews = mediaPreviews.getSelectedIndex() == 0;
+        app.notifications = notifications.isSelected(0);
         app.themeId = theme.getSelectedIndex();
         app.logLevel = logLevel.getSelectedIndex();
         app.remoteLog = remoteLog.isSelected(0);
