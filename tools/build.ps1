@@ -701,7 +701,8 @@ MIDlet-Permissions-Opt: javax.microedition.io.Connector.socket, javax.microediti
 MicroEdition-Profile: MIDP-2.0
 MicroEdition-Configuration: CLDC-1.1
 MIDlet-Jar-URL: $ArtifactName.jar
-MIDlet-Jar-Size: $jarSizeMIDlet-Description: ResyGram, Telegram for legacy Java phones, build $buildId
+MIDlet-Jar-Size: $jarSize
+MIDlet-Description: ResyGram, Telegram for legacy Java phones, build $buildId
 "@ -replace "`r`n", "`n" | Set-Content -Path $jadPath -Encoding ASCII
 
 Write-Ok "dist/$ArtifactName.jar  ($([math]::Round($jarSize / 1KB, 1)) KB)"
