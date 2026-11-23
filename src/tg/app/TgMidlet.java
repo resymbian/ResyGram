@@ -96,6 +96,7 @@ import tg.ui.DialogListScreen;
 import tg.ui.DateTime;
 import tg.ui.EmojiText;
 import tg.ui.SettingsScreen;
+import tg.ui.SplashScreen;
 import tg.ui.TextScreen;
 import tg.ui.TouchContextListener;
 import tg.ui.TopicListScreen;
@@ -402,6 +403,12 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
      * editable the moment it is shown, which is the only behaviour that can be
      * relied on across an unknown 2011 device, an emulator and a QWERTY phone.
      */
+    /**
+     * The startup canvas, from the first line of {@link #startApp} until the
+     * start screen has been built. Null once it has been taken down.
+     */
+    private SplashScreen splash;
+
     private TextBox phoneBox;
     private TextBox codeBox;
     private TextBox passwordBox;
@@ -958,94 +965,163 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
                   + " env " + BuildInfo.ENV);
         Diag.mem("startup");
 
-        store = new RmsAuthKeyStore();
-
-        // Read before anything writes, so it describes the previous launch
-        // rather than this one. "none - this is the first launch" appearing on
-        // every launch is a store that does not survive exit, which presents to
-        // a user as an app that forgot their login.
-        startupMarker = RmsCheck.checkPersistenceMarker();
-        Diag.info("rms " + startupMarker);
-
-        // Before anything sized from it is built. A stored measurement is a
-        // cheap RMS read; a first launch gets the reference profile now and a
-        // real one from the background probe started after the start screen is
-        // up. Either way the caches below are built against the right number.
-        heapMeasured = HeapMeasurement.applyStored(store);
-        MemoryPressure.setRelief(this);
-        navigation = new ScreenStack();
-        avatarCache = new AvatarCache();
-
-        outgoingStore = new RmsOutgoingStore();
-        draftStore = new RmsDraftStore();
-        updateStateStore = new RmsUpdateStateStore();
-        avatarDiskCache = new RmsAvatarCache();
-        conversationCache = new RmsConversationCache();
-        dialogIndex = new RmsDialogIndex();
-        connectionConfig = new ConnectionConfig();
-        appSettings = new AppSettings();
-        appSettings.load(store);
-        configureLogging();
-        connectionDiagnostics = new ConnectionDiagnostics();
-        telegram = new Telegram(new MidpLinkFactory(), new Rng(), store,
-                                connectionConfig, connectionDiagnostics);
-        telegram.setOutgoingStore(outgoingStore);
-        telegram.setUpdateStateStore(updateStateStore);
-        // The three stores the shell owns rather than the client. Registered
-        // here so there is one list of what belongs to an account, instead of
-        // a second cleanup path in the logout callback that could only log its
-        // failures.
-        telegram.accountWipe().add("drafts", draftStore);
-        telegram.accountWipe().add("avatars", avatarDiskCache);
-        telegram.accountWipe().add("chat cache", conversationCache);
-        telegram.accountWipe().add("dialog index", dialogIndex);
-        // The three producers that are on none of this client's own threads:
-        // the reconnect loop, the outbox drain and the update queue each raise
-        // these from wherever they happen to be. Posted, not applied, for the
-        // reason UiDispatcher exists - each one is a multi-step transition.
-        telegram.setConnectionListener(new Telegram.ConnectionListener()
+        // Everything below this line used to run before the AMS painted
+        // anything, which is why a launch looked like a frozen black screen.
+        // The splash goes up first and the rest happens behind it.
+        splash = new SplashScreen(Theme.byId(Theme.LIGHT));
+        display.setCurrent(splash);
+        splash.start();
+        new Thread(new Runnable()
         {
-            public void onConnectionState(final int state, final int retrySeconds,
-                                          final String detail)
+            public void run() { bootstrapClient(); }
+        }).start();
+    }
+
+    /**
+     * Build the client off the display thread, behind the splash.
+     *
+     * Nothing here touches lcdui: the stores, the protocol stack and the caches
+     * are plain objects, and the one transition that does reach the screen - the
+     * start screen replacing the splash - is posted. startApp() has already
+     * returned by then, so this is the first moment the handset is free to
+     * paint.
+     */
+    private void bootstrapClient()
+    {
+        try
+        {
+            step("reading stores");
+            store = new RmsAuthKeyStore();
+
+            // Read before anything writes, so it describes the previous launch
+            // rather than this one. "none - this is the first launch" appearing on
+            // every launch is a store that does not survive exit, which presents to
+            // a user as an app that forgot their login.
+            startupMarker = RmsCheck.checkPersistenceMarker();
+            Diag.info("rms " + startupMarker);
+
+            // Before anything sized from it is built. A stored measurement is a
+            // cheap RMS read; a first launch gets the reference profile now and a
+            // real one from the background probe started after the start screen is
+            // up. Either way the caches below are built against the right number.
+            heapMeasured = HeapMeasurement.applyStored(store);
+            MemoryPressure.setRelief(this);
+            navigation = new ScreenStack();
+            avatarCache = new AvatarCache();
+
+            outgoingStore = new RmsOutgoingStore();
+            draftStore = new RmsDraftStore();
+            updateStateStore = new RmsUpdateStateStore();
+            avatarDiskCache = new RmsAvatarCache();
+            conversationCache = new RmsConversationCache();
+            dialogIndex = new RmsDialogIndex();
+            connectionConfig = new ConnectionConfig();
+            appSettings = new AppSettings();
+            appSettings.load(store);
+            configureLogging();
+            connectionDiagnostics = new ConnectionDiagnostics();
+            telegram = new Telegram(new MidpLinkFactory(), new Rng(), store,
+                                    connectionConfig, connectionDiagnostics);
+            telegram.setOutgoingStore(outgoingStore);
+            telegram.setUpdateStateStore(updateStateStore);
+            // The three stores the shell owns rather than the client. Registered
+            // here so there is one list of what belongs to an account, instead of
+            // a second cleanup path in the logout callback that could only log its
+            // failures.
+            telegram.accountWipe().add("drafts", draftStore);
+            telegram.accountWipe().add("avatars", avatarDiskCache);
+            telegram.accountWipe().add("chat cache", conversationCache);
+            telegram.accountWipe().add("dialog index", dialogIndex);
+            // The three producers that are on none of this client's own threads:
+            // the reconnect loop, the outbox drain and the update queue each raise
+            // these from wherever they happen to be. Posted, not applied, for the
+            // reason UiDispatcher exists - each one is a multi-step transition.
+            telegram.setConnectionListener(new Telegram.ConnectionListener()
             {
-                ui.post(new Runnable()
+                public void onConnectionState(final int state, final int retrySeconds,
+                                              final String detail)
                 {
-                    public void run()
+                    ui.post(new Runnable()
                     {
-                        updateConnectionUi(state, retrySeconds, detail);
-                    }
-                });
-            }
-        });
-        telegram.setOutgoingListener(new Telegram.OutgoingListener()
-        {
-            public void onOutboxChanged()
+                        public void run()
+                        {
+                            updateConnectionUi(state, retrySeconds, detail);
+                        }
+                    });
+                }
+            });
+            telegram.setOutgoingListener(new Telegram.OutgoingListener()
             {
-                ui.post(new Runnable()
+                public void onOutboxChanged()
                 {
-                    public void run() { updateOutboxUi(); }
-                });
-            }
-        });
-        telegram.setUpdateListener(new Telegram.UpdateListener()
-        {
-            public void onUpdates(final UpdateBatch batch)
+                    ui.post(new Runnable()
+                    {
+                        public void run() { updateOutboxUi(); }
+                    });
+                }
+            });
+            telegram.setUpdateListener(new Telegram.UpdateListener()
             {
-                ui.post(new Runnable()
+                public void onUpdates(final UpdateBatch batch)
                 {
-                    public void run() { applyUpdateBatch(batch); }
-                });
-            }
-        });
-        startDraftAutosave();
+                    ui.post(new Runnable()
+                    {
+                        public void run() { applyUpdateBatch(batch); }
+                    });
+                }
+            });
+            startDraftAutosave();
 
-        // Do not touch the network on startup. An unsigned MIDlet may get only
-        // one useful permission prompt, and on restricted handsets the user
-        // must be able to configure MTProxy before the first direct attempt.
-        // Decided before the screen is drawn, so the first paint can say so.
-        heapProbeRunning = !heapMeasured && !HeapMeasurement.exhausted(store);
-        showStartScreen();
-        startHeapProbe();
+            // Do not touch the network on startup. An unsigned MIDlet may get only
+            // one useful permission prompt, and on restricted handsets the user
+            // must be able to configure MTProxy before the first direct attempt.
+            // Decided before the screen is drawn, so the first paint can say so.
+        final boolean probe = !heapMeasured
+                && !HeapMeasurement.exhausted(store);
+        step("opening the window");
+        ui.post(new Runnable()
+        {
+            public void run()
+            {
+                heapProbeRunning = probe;
+                stopSplash();
+                showStartScreen();
+                startHeapProbe();
+            }
+        });
+        }
+        catch (final Throwable t)
+        {
+            // A failure here used to be a black screen and a dead process. The
+            // splash is the only screen that exists, so it is the one that has
+            // to carry the message.
+            Diag.error("startup failed", t);
+            ui.post(new Runnable()
+            {
+                public void run()
+                {
+                    if (splash != null)
+                    {
+                        splash.stop();
+                        splash.setStatus("could not start: " + t);
+                    }
+                }
+            });
+        }
+    }
+
+    /** Change the splash line, if there is one. */
+    private void step(String what)
+    {
+        if (splash != null) { splash.setStatus(what); }
+    }
+
+    /** Take the splash down. Display thread only. */
+    private void stopSplash()
+    {
+        if (splash == null) { return; }
+        splash.stop();
+        splash = null;
     }
 
     /**
