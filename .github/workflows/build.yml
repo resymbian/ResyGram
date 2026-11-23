@@ -1,0 +1,148 @@
+name: Build
+
+# The JAR is built here, from repository secrets, so no credential ever reaches
+# the git history. TG_API_ID and TG_API_HASH are read by tools/_env.ps1 out of
+# the environment - ahead of any secrets/ file, which CI does not have - and
+# generated into build-only sources that .gitignore keeps out of the tree.
+#
+# Push to main: build and attach the pair as a workflow artifact.
+# Push a v* tag: the same pair, published on a GitHub Release.
+# workflow_dispatch: build on demand, no release.
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write        # required by softprops/action-gh-release
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # JDK 9 dropped -source 1.3 / -target 1.1, which CLDC 1.1 requires, and
+      # Temurin 8 still ships the rt.jar that tools/_env.ps1 uses as a fallback
+      # bootclasspath. 8 is not a preference here.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '8'
+
+      - name: Point the toolchain at JDK 8
+        shell: pwsh
+        run: echo "JDK8_HOME=$env:JAVA_HOME" >> $env:GITHUB_ENV
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      # sdk/ is the pinned ProGuard and WTK download; the lock file carries the
+      # sha256 of every artifact, so its hash is the cache key.
+      - name: Cache pinned toolchain
+        uses: actions/cache@v4
+        with:
+          path: sdk
+          key: sdk-${{ runner.os }}-${{ hashFiles('tools/sdk.lock.json') }}
+
+      - name: Bootstrap
+        shell: pwsh
+        run: ./tools/bootstrap.ps1
+
+      # $AppVersion in tools/build.ps1 is the single source of truth, and the tag
+      # has to agree with it: a JAD whose MIDlet-Version contradicts the release
+      # it came from confuses the application manager on upgrade.
+      - name: Resolve version
+        shell: pwsh
+        run: |
+          $m = Select-String -Path tools/build.ps1 -Pattern '^\$AppVersion\s*=\s*"([^"]+)"' |
+                 Select-Object -First 1
+          if (-not $m) { Write-Host 'cannot find $AppVersion in tools/build.ps1'; exit 1 }
+          $version = $m.Matches[0].Groups[1].Value
+          if ('${{ github.ref_type }}' -eq 'tag') {
+            $tag = '${{ github.ref_name }}' -replace '^v', ''
+            if ($tag -ne $version) {
+              Write-Host ('tag "{0}" does not match $AppVersion "{1}" - bump the version or retag' -f '${{ github.ref_name }}', $version)
+              exit 1
+            }
+          }
+          Write-Host "version $version"
+          "APP_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      # -Env production is not optional: the default is Telegram's test data
+      # centres, which hold no real accounts, and an auth_key is bound to the
+      # environment it was made in.
+      #
+      # -Release is what makes the JAR small enough to install quickly and load
+      # in a reasonable time on a 2011 handset: optimised and obfuscated, which
+      # removes the long class and member names repeated in every constant pool.
+      - name: Build
+        shell: pwsh
+        env:
+          TG_API_ID: ${{ secrets.TG_API_ID }}
+          TG_API_HASH: ${{ secrets.TG_API_HASH }}
+        run: ./tools/build.ps1 -Target tg -Env production -Release -ArtifactName "ResyGram-$env:APP_VERSION"
+
+      # MIDlet-Jar-Size must match byte for byte or the handset aborts the
+      # install with an error that names nothing useful.
+      - name: Verify JAD/JAR consistency
+        shell: pwsh
+        run: |
+          $bad = $false
+          foreach ($jad in Get-ChildItem dist -Filter *.jad) {
+            $text = Get-Content $jad.FullName -Raw
+            $url  = ([regex]::Match($text, 'MIDlet-Jar-URL:\s*(.+)')).Groups[1].Value.Trim()
+            $size = [int]([regex]::Match($text, 'MIDlet-Jar-Size:\s*(\d+)')).Groups[1].Value
+            $jar  = Join-Path $jad.DirectoryName $url
+            if (-not (Test-Path $jar)) {
+              Write-Host "$($jad.Name): MIDlet-Jar-URL '$url' does not exist"; $bad = $true; continue
+            }
+            $actual = (Get-Item $jar).Length
+            if ($actual -ne $size) {
+              Write-Host "$($jad.Name): MIDlet-Jar-Size $size but $url is $actual bytes"; $bad = $true; continue
+            }
+            Write-Host "$($jad.Name) -> $url ($actual bytes) OK"
+          }
+          if ($bad) { exit 1 }
+
+      - name: Checksums
+        shell: pwsh
+        run: |
+          $lines = Get-ChildItem dist -File |
+            Where-Object { $_.Extension -in '.jar', '.jad' } |
+            Sort-Object Name |
+            ForEach-Object { "{0}  {1}" -f (Get-FileHash $_ -Algorithm SHA256).Hash.ToLower(), $_.Name }
+          [IO.File]::WriteAllText((Join-Path $PWD.Path 'dist/SHA256SUMS.txt'), ($lines -join "`n") + "`n")
+          $lines | Write-Host
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ResyGram-${{ env.APP_VERSION }}
+          path: |
+            dist/ResyGram-*.jar
+            dist/ResyGram-*.jad
+            dist/SHA256SUMS.txt
+
+  release:
+    needs: build
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/**/*
+          generate_release_notes: true

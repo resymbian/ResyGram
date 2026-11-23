@@ -1,0 +1,16 @@
+package tg.api;
+
+import java.io.IOException;
+
+/** Durable storage for user-authored messages awaiting confirmed delivery. */
+public interface OutgoingStore extends AccountStore
+{
+    OutgoingMessage add(Peer peer, String text, long randomId, long createdAt)
+            throws IOException;
+    OutgoingMessage add(Peer peer, String text, int replyToMessageId,
+                        int threadRootId, long randomId, long createdAt)
+            throws IOException;
+    OutgoingMessage[] list() throws IOException;
+    void save(OutgoingMessage message) throws IOException;
+    void remove(int localId) throws IOException;
+}

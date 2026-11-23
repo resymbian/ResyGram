@@ -1,0 +1,2806 @@
+package tgtest;
+
+import java.io.ByteArrayInputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.awt.Graphics2D;
+import java.awt.RenderingHints;
+import java.awt.image.BufferedImage;
+import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+
+import javax.imageio.ImageIO;
+
+import javax.microedition.lcdui.Alert;
+import javax.microedition.lcdui.Canvas;
+import javax.microedition.lcdui.ChoiceGroup;
+import javax.microedition.lcdui.Displayable;
+import javax.microedition.lcdui.Form;
+import javax.microedition.lcdui.Item;
+import javax.microedition.rms.RecordEnumeration;
+import javax.microedition.rms.RecordStore;
+
+import org.microemu.device.j2se.J2SEMutableImage;
+
+import tg.api.Api;
+import tg.api.Dialog;
+import tg.api.DialogPage;
+import tg.api.ForumTopic;
+import tg.api.ForumTopicPage;
+import tg.api.Message;
+import tg.api.MessageEntity;
+import tg.api.Peer;
+import tg.api.Requests;
+import tg.api.Telegram;
+import tg.api.UpdateSync;
+import tg.crypto.Rng;
+import tg.diag.CrashLog;
+import tg.diag.Diag;
+import tg.mem.MemoryBudget;
+import tg.mem.MemoryPressure;
+import tg.mt.ConnectionConfig;
+import tg.mt.Dc;
+import tg.plat.RmsAuthKeyStore;
+import tg.tl.TlReader;
+import tg.tl.TlWriter;
+import tg.ui.ChatScreen;
+import tg.ui.DialogListScreen;
+import tg.ui.JpegDecoder;
+import tg.ui.TopicListScreen;
+
+/**
+ * Drives the client through MicroEmulator's MIDP runtime from a script.
+ *
+ * The GUI emulator is the only way most of this client has ever been exercised,
+ * and it needs a person. That makes the flows that matter most - connect, sign
+ * in, open a chat, load a photo - the ones with no automated coverage at all:
+ * {@code EmulatorSmokeTest} deliberately stops before the network.
+ *
+ * This drives the same screens by command label and reports what happened,
+ * including the diagnostic ring, which is otherwise readable only on the Log
+ * screen of a running emulator.
+ *
+ * Scenarios:
+ * <pre>
+ *   probe                measure the heap, print the derived budgets, exit
+ *   route  &lt;mode&gt;        set the connection mode and connect ("asis": do not
+ *                          touch Settings, connect on what is stored)
+ *   login  &lt;phone&gt; &lt;codeFile&gt;   connect, request a code, wait for the file
+ *   session              use a stored session: dialogs, open the first chat
+ *   photos &lt;title&gt;       open a picture-heavy chat and decode its photos
+ *   minheap &lt;title&gt; &lt;on|off&gt;    one verdict line: what works at this heap
+ *   scroll &lt;title&gt; [pages]      read a chat backwards, then forwards again
+ *   chats  [pages]              scroll the chat list down and back up again
+ *   hashprobe [limit]           does messages.getDialogs honour a hash?
+ *   formatting &lt;dir&gt;           send rich text to Saved Messages and capture
+ *                                concealed/revealed spoiler screenshots
+ *   forumspoiler &lt;forum&gt; &lt;topic&gt; &lt;dir&gt;  verify list previews in a topic
+ * </pre>
+ *
+ * The code file exists because the sign-in code arrives on the user's phone and
+ * {@code phoneCodeHash} lives only in memory, so it has to be entered by the
+ * same process that asked for it. Writing one line into a file is the whole of
+ * the human's job.
+ *
+ * This talks to real Telegram servers in every scenario except {@code probe}.
+ */
+public final class EmulatorDriver
+{
+    private static final int CONNECT_TIMEOUT_MS = 120000;
+
+    /**
+     * Dialogs weighed at once by {@link #measureDialogBytes}.
+     *
+     * Large on purpose: the answer is a difference between two heap readings and
+     * a small sample is mostly noise. It is also why the measurement has to be
+     * skippable - see {@link #awaitHeapMeasurement}.
+     */
+    private static final int DIALOG_SAMPLE = 2000;
+
+    /** Remembered so a stuck modal alert can be stepped past. */
+    private static Displayable dialogList;
+
+    /**
+     * Run one scenario and leave, whatever happened.
+     *
+     * The exit is in a finally of its own because at the bottom of the heap
+     * ladder {@link #drive} can die inside its own teardown - the report itself
+     * needs to allocate - and MicroEmulator's event thread and the client's
+     * network threads are not daemons. A JVM whose main thread is dead but whose
+     * threads are not stays up forever, and an unattended sweep then hangs on
+     * exactly the rung it was built to measure. Observed: a run at 1760 KB of
+     * ballast printed its verdict, threw out of dumpMemory, and was still
+     * resident eight minutes later.
+     */
+    public static void main(String[] args) throws Exception
+    {
+        int exit = 1;
+        try { exit = drive(args); }
+        catch (Throwable t)
+        {
+            System.out.println("DRIVER FAILED OUTRIGHT: " + t);
+        }
+        finally
+        {
+            try { System.out.flush(); } catch (Throwable ignored) { }
+            System.exit(exit);
+        }
+    }
+
+    private static int drive(String[] args) throws Exception
+    {
+        String scenario = args.length > 0 ? args[0] : "probe";
+
+        startWatchdog();
+        if (!environmentMatches()) { return 2; }
+        holdBallast();
+        startDiagTail(scenario);
+        EmulatorHarness.install("driver", 240, 320);
+        if (System.getProperty("tg.driver.remeasure") != null) { forgetMeasurement(); }
+        EmulatorHarness app = new EmulatorHarness();
+
+        int exit = 0;
+        try
+        {
+            app.start();
+            // setCurrent posts to MicroEmulator's event dispatcher rather than
+            // switching inline, so the first screen has to be waited for.
+            System.out.println("start screen: "
+                    + EmulatorHarness.describe(app.awaitChange(null, 10000)));
+            awaitHeapMeasurement(app);
+
+            if ("probe".equals(scenario)) { exit = 0; }
+            else if ("route".equals(scenario))
+            {
+                exit = route(app, args.length > 1 ? args[1] : "Auto") ? 0 : 1;
+            }
+            else if ("login".equals(scenario))
+            {
+                exit = login(app, arg(args, 1), arg(args, 2), arg(args, 3)) ? 0 : 1;
+            }
+            else if ("session".equals(scenario))
+            {
+                exit = session(app, arg(args, 1), arg(args, 2)) ? 0 : 1;
+            }
+            else if ("photos".equals(scenario))
+            {
+                exit = photos(app, arg(args, 1)) ? 0 : 1;
+            }
+            else if ("minheap".equals(scenario))
+            {
+                exit = minheap(app, arg(args, 1), arg(args, 2)) ? 0 : 1;
+            }
+            else if ("scroll".equals(scenario))
+            {
+                exit = scroll(app, arg(args, 1), arg(args, 2), arg(args, 3))
+                        ? 0 : 1;
+            }
+            else if ("chats".equals(scenario))
+            {
+                exit = chats(app, arg(args, 1), arg(args, 2)) ? 0 : 1;
+            }
+            else if ("navigate".equals(scenario))
+            {
+                exit = navigate(app, arg(args, 1), arg(args, 2)) ? 0 : 1;
+            }
+            else if ("hashprobe".equals(scenario))
+            {
+                exit = hashProbe(arg(args, 1));
+            }
+            else if ("formatting".equals(scenario))
+            {
+                exit = formatting(app, arg(args, 1)) ? 0 : 1;
+            }
+            else if ("forumspoiler".equals(scenario))
+            {
+                exit = forumSpoiler(app, arg(args, 1), arg(args, 2),
+                        arg(args, 3)) ? 0 : 1;
+            }
+            else
+            {
+                System.out.println("unknown scenario " + scenario);
+                exit = 2;
+            }
+        }
+        catch (Throwable t)
+        {
+            System.out.println("DRIVER FAILED: " + t);
+            t.printStackTrace(System.out);
+            exit = 1;
+        }
+        finally
+        {
+            // Individually guarded. Every one of these allocates, this is the
+            // moment the heap is at its worst, and the later steps are the ones
+            // that carry the evidence - losing the log because the memory
+            // summary threw would be the wrong way round.
+            try { DiagTail.stop(); } catch (Throwable t) { note("tail", t); }
+            try { dumpMemory(); } catch (Throwable t) { note("memory", t); }
+            try { dumpLog(); } catch (Throwable t) { note("log", t); }
+            // Last, because it decodes twelve images: on a ballasted run that is
+            // the largest allocation the driver itself makes, and nothing after
+            // it should depend on the heap surviving.
+            try { reportAvatarBlobs(); } catch (Throwable t) { note("avatars", t); }
+            try { app.stop(); } catch (Throwable ignored) { }
+        }
+        return exit;
+    }
+
+    private static void note(String what, Throwable t)
+    {
+        try { System.out.println("could not report " + what + ": " + t); }
+        catch (Throwable ignored) { }
+    }
+
+    /**
+     * Is the build in {@code build/desktop/classes} the one the caller asked
+     * for?
+     *
+     * The data centres are compiled in, and {@code -SkipBuild} drives whatever
+     * happens to be there. Anything that rebuilds as {@code -Env test} - and
+     * {@code test.ps1} and {@code smoke-emulator.ps1} both do - therefore leaves
+     * a later production run pointed at the test data centres, where the stored
+     * production key is unknown. What comes back is
+     * {@code 401 AUTH_KEY_UNREGISTERED}, the client says "sign-in required", and
+     * a whole sweep reads as a signed-out account. It is documented as a trap in
+     * the private notes; it costs the same hour every time it is rediscovered.
+     *
+     * The build knows which it is, so it says so and stops.
+     */
+    private static boolean environmentMatches()
+    {
+        String expected = System.getProperty("tg.driver.expectenv");
+        if (expected == null || expected.length() == 0) { return true; }
+        boolean wantTest = "test".equalsIgnoreCase(expected);
+        if (wantTest == Dc.isTest()) { return true; }
+
+        System.out.println("WRONG BUILD: asked for -Env " + expected
+                + " but build/desktop/classes is "
+                + (Dc.isTest() ? "test" : "production") + ".");
+        System.out.println("  Something rebuilt the desktop classes for the"
+                + " other environment - test.ps1 and smoke-emulator.ps1 both"
+                + " build -Env test.");
+        System.out.println("  Re-run without -SkipBuild.");
+        return false;
+    }
+
+    /**
+     * A hard deadline on the whole run.
+     *
+     * A scenario that blocks - a connect that never times out, a modal alert
+     * nobody dismisses, a thread wedged mid-teardown - costs an unattended sweep
+     * everything after it. {@code halt} rather than {@code exit}: the reason to
+     * be here at all is that the orderly path is not working.
+     *
+     * Long enough that no healthy scenario reaches it. The slowest measured is
+     * {@code minheap} with a full photo hunt at about three minutes.
+     */
+    private static void startWatchdog()
+    {
+        String configured = System.getProperty("tg.driver.deadline");
+        int seconds = 600;
+        try
+        {
+            if (configured != null) { seconds = Integer.parseInt(configured.trim()); }
+        }
+        catch (Throwable ignored) { }
+        if (seconds <= 0) { return; }
+
+        final long deadlineMs = seconds * 1000L;
+        Thread watchdog = new Thread(new Runnable()
+        {
+            public void run()
+            {
+                try { Thread.sleep(deadlineMs); }
+                catch (InterruptedException e) { return; }
+                System.out.println("DRIVER DEADLINE: " + (deadlineMs / 1000)
+                        + "s elapsed, halting");
+                System.out.flush();
+                Runtime.getRuntime().halt(3);
+            }
+        }, "driver-watchdog");
+        watchdog.setDaemon(true);
+        watchdog.start();
+    }
+
+    // ------------------------------------------------------------- scenarios
+
+    /**
+     * Wait for the client's own first-launch measurement and print what it
+     * derived. With a working record store this also proves the value is stored
+     * and reused, because a second run reports "stored" rather than "measured".
+     */
+    private static void awaitHeapMeasurement(EmulatorHarness app) throws Exception
+    {
+        for (int i = 0; i < 200 && MemoryBudget.source() == MemoryBudget.SOURCE_DEFAULT; i++)
+        {
+            Thread.sleep(50);
+        }
+        String[] lines = MemoryBudget.lines();
+        for (int i = 0; i < lines.length; i++) { System.out.println("  " + lines[i]); }
+
+        // Weighing two thousand dialogs costs the better part of a megabyte, and
+        // this runs before every scenario including the ballasted ones, where
+        // the whole point is that a megabyte is not there. It is why a run at
+        // 1280 KB of ballast died with "GC overhead limit exceeded" before the
+        // client had connected - the driver, not the client, was out of memory.
+        //
+        // Asked rather than assumed, and skipped out loud: a missing number is a
+        // fact, a number measured out of a thrashing heap is not.
+        long need = (long) DIALOG_SAMPLE * 512L;
+        if (MemoryPressure.fits(need))
+        {
+            System.out.println("  dialogBytes = " + measureDialogBytes(DIALOG_SAMPLE)
+                    + " (measured, " + Dialog.PREVIEW_MAX + "-char preview)");
+        }
+        else
+        {
+            System.out.println("  dialogBytes = skipped (needs " + (need / 1024)
+                    + " KB, headroom " + (MemoryPressure.headroom() / 1024)
+                    + " KB)");
+        }
+    }
+
+    /**
+     * What one retained chat-list row actually costs.
+     *
+     * Every other number in {@link MemoryBudget} is a fraction of a measured
+     * heap. The dialog cap was not derived that way and could not have been:
+     * until the preview was clipped at ingest a Dialog held the whole of the
+     * last message, so it had no fixed size and no count of them bounded
+     * anything.
+     *
+     * Weighed here rather than inferred from the running client, because the
+     * client's list also drags in decoded avatars, peer-cache entries and the
+     * garbage of parsing a TL response - all separately budgeted, all larger
+     * than the thing being measured. What is built is one row's worth: the
+     * Dialog, the Peer it holds alive, a title and a preview at the cap.
+     *
+     * Strings are built rather than written as literals, or the constant pool
+     * would hand the same one back every time and the answer would be a
+     * reference.
+     */
+    private static long measureDialogBytes(int count)
+    {
+        Dialog[] held = new Dialog[count];
+        long before = usedHeap();
+        for (int i = 0; i < count; i++)
+        {
+            Dialog d = new Dialog();
+            d.peer = new Peer(Peer.USER, 100000L + i);
+            d.peer.title = fill("name ", 24, i);
+            d.peer.accessHash = i;
+            d.topMessageId = 1000 + i;
+            d.unreadCount = i & 7;
+            d.date = 1767225600 - i;
+            d.lastMessage = fill("preview ", Dialog.PREVIEW_MAX, i);
+            held[i] = d;
+        }
+        long after = usedHeap();
+        // Touched after the second measurement so nothing can be collected
+        // early, and so no optimiser can decide the array was never needed.
+        int alive = 0;
+        for (int i = 0; i < count; i++)
+        {
+            if (held[i] != null && held[i].peer != null) { alive++; }
+        }
+        return alive == count ? (after - before) / count : -1;
+    }
+
+    /** A distinct String of exactly {@code length} characters. */
+    private static String fill(String prefix, int length, int seed)
+    {
+        StringBuffer sb = new StringBuffer(length);
+        sb.append(prefix).append(seed);
+        while (sb.length() < length) { sb.append((char) ('a' + (seed + sb.length()) % 26)); }
+        sb.setLength(length);
+        return sb.toString();
+    }
+
+    /** Set the connection mode in Settings and save it, the way a user would. */
+    private static boolean setMode(EmulatorHarness app, String modeLabel)
+            throws Exception
+    {
+        // AsIs means what the documentation says it means: do not open Settings
+        // at all, and connect on whatever the profile already has. It was only
+        // honoured by the scenarios that special-cased it before calling here,
+        // so every other one answered "no such mode: AsIs" and stopped - which
+        // is the one value a first-launch or a stored-configuration run needs,
+        // because saving Settings is itself the repair for a configuration that
+        // is wrong.
+        if ("AsIs".equals(modeLabel)) { return true; }
+
+        Displayable start = app.current();
+        if (!app.press("Settings"))
+        {
+            System.out.println("no Settings command on " + EmulatorHarness.describe(start));
+            return false;
+        }
+        Displayable settings = app.awaitChange(start, 5000);
+        if (!(settings instanceof Form))
+        {
+            System.out.println("Settings is not a Form: " + EmulatorHarness.describe(settings));
+            return false;
+        }
+
+        Form form = (Form) settings;
+        ChoiceGroup mode = null;
+        for (int i = 0; i < form.size(); i++)
+        {
+            Item item = form.get(i);
+            if (item instanceof ChoiceGroup
+                    && "Mode".equals(((ChoiceGroup) item).getLabel()))
+            {
+                mode = (ChoiceGroup) item;
+                break;
+            }
+        }
+        if (mode == null) { System.out.println("no Mode choice on Settings"); return false; }
+
+        int index = -1;
+        for (int i = 0; i < mode.size(); i++)
+        {
+            if (modeLabel.equalsIgnoreCase(mode.getString(i))) { index = i; }
+        }
+        if (index < 0)
+        {
+            System.out.println("no such mode: " + modeLabel);
+            return false;
+        }
+        System.out.println("mode: " + mode.getString(mode.getSelectedIndex())
+                           + " -> " + mode.getString(index));
+        mode.setSelectedIndex(index, true);
+
+        if (!app.press("Save")) { System.out.println("no Save command"); return false; }
+        app.awaitChange(settings, 5000);
+
+        // Saving a changed mode makes the client reconnect on its own, so the
+        // screen after Save may already be past the start screen. Only press
+        // Back while there is one to press.
+        for (int i = 0; i < 4 && app.press("Back"); i++)
+        {
+            app.awaitChange(app.current(), 2000);
+        }
+        System.out.println("after Save: " + EmulatorHarness.describe(app.current()));
+        return true;
+    }
+
+    private static boolean route(EmulatorHarness app, String modeLabel)
+            throws Exception
+    {
+        // "asis" is the only way to observe a genuine first launch. Every other
+        // value opens Settings and saves, and saving is itself the repair for
+        // anything the stored configuration got wrong - so a driver that always
+        // sets the mode can never see what an untouched profile does.
+        if (!"asis".equalsIgnoreCase(modeLabel) && !setMode(app, modeLabel))
+        {
+            return false;
+        }
+        return connect(app);
+    }
+
+    /**
+     * Connect and wait for the client to reach either the phone prompt (no
+     * session) or the dialog list (session restored).
+     */
+    private static boolean connect(EmulatorHarness app) throws Exception
+    {
+        long t0 = System.currentTimeMillis();
+        if (settled(app) != null)
+        {
+            System.out.println("already past connect: "
+                               + EmulatorHarness.describe(app.current()));
+            return true;
+        }
+        if (app.press("Connect"))
+        {
+            System.out.println("pressed Connect, waiting up to "
+                               + (CONNECT_TIMEOUT_MS / 1000) + "s");
+        }
+        else
+        {
+            // Saving a changed connection mode reconnects by itself, so there
+            // is often nothing left to press. Waiting is still correct.
+            System.out.println("no Connect command on "
+                               + EmulatorHarness.describe(app.current())
+                               + " - waiting for the connection already in flight");
+        }
+
+        for (int waited = 0; waited < CONNECT_TIMEOUT_MS; waited += 250)
+        {
+            String where = settled(app);
+            if (where != null)
+            {
+                System.out.println(where + " in "
+                                   + (System.currentTimeMillis() - t0) + " ms");
+                return true;
+            }
+            Thread.sleep(250);
+        }
+        System.out.println("still on " + EmulatorHarness.describe(app.current())
+                           + " after " + (System.currentTimeMillis() - t0) + " ms");
+        System.out.println("commands: " + app.labels());
+        return false;
+    }
+
+    /**
+     * Whether the client has finished connecting, and how it ended up.
+     *
+     * Two outcomes count as done: the phone prompt (the key is not tied to an
+     * account) and the chat list (a stored session was restored).
+     */
+    private static String settled(EmulatorHarness app) throws Exception
+    {
+        Displayable now = app.current();
+        if (now == null) { return null; }
+        // By command label, not by title: the dialog list titles itself with
+        // the account, and a label is what survives obfuscation anyway.
+        if (EmulatorHarness.command(now, "Saved Messages") != null)
+        {
+            return "restored a session";
+        }
+        String title = EmulatorHarness.title(now);
+        if (title != null && title.indexOf("Phone number") >= 0)
+        {
+            return "reached the phone prompt";
+        }
+        return null;
+    }
+
+    private static boolean login(EmulatorHarness app, String modeLabel,
+                                 String phone, String codeFile) throws Exception
+    {
+        if (phone == null || codeFile == null)
+        {
+            System.out.println("usage: login <mode> <phone> <codeFile>");
+            return false;
+        }
+        if (!setMode(app, modeLabel == null ? "Auto" : modeLabel)) { return false; }
+        if (!connect(app)) { return false; }
+
+        String title = EmulatorHarness.title(app.current());
+        if (title != null && title.indexOf("Chats") >= 0)
+        {
+            System.out.println("already signed in; nothing to do");
+            return true;
+        }
+
+        if (!app.type(phone)) { System.out.println("phone prompt is not a TextBox"); return false; }
+        Displayable phoneScreen = app.current();
+        if (!app.press("Next")) { System.out.println("no Next on the phone prompt"); return false; }
+
+        // The code screen is titled with the delivery method the server chose.
+        if (!app.awaitCommand("Sign in", 90000))
+        {
+            System.out.println("no code prompt: " + EmulatorHarness.describe(app.current()));
+            System.out.println("commands: " + app.labels());
+            return false;
+        }
+        System.out.println("code requested: " + EmulatorHarness.describe(app.current()));
+        System.out.println("WAITING FOR CODE -> write it into " + codeFile);
+
+        String code = awaitCode(new File(codeFile), 600000);
+        if (code == null) { System.out.println("no code arrived"); return false; }
+        System.out.println("code received (" + code.length() + " digits)");
+
+        if (!app.type(code)) { System.out.println("code prompt is not a TextBox"); return false; }
+        Displayable codeScreen = app.current();
+        if (!app.press("Sign in")) { System.out.println("no Sign in command"); return false; }
+
+        for (int waited = 0; waited < 120000; waited += 250)
+        {
+            if (EmulatorHarness.command(app.current(), "Saved Messages") != null)
+            {
+                System.out.println("SIGNED IN: " + EmulatorHarness.describe(app.current()));
+                return openFirstChat(app);
+            }
+            Thread.sleep(250);
+        }
+        System.out.println("sign-in did not reach the chat list: "
+                           + EmulatorHarness.describe(app.current()));
+        System.out.println("commands: " + app.labels());
+        return false;
+    }
+
+    private static boolean session(EmulatorHarness app, String modeLabel,
+                                   String sendText) throws Exception
+    {
+        if (modeLabel != null && modeLabel.length() > 0
+                && !setMode(app, modeLabel)) { return false; }
+        if (!connect(app)) { return false; }
+        if (EmulatorHarness.command(app.current(), "Saved Messages") == null)
+        {
+            System.out.println("no stored session; run the login scenario first");
+            return false;
+        }
+
+        // Let the dialog list finish loading before touching anything.
+        //
+        // Worker.submit drops a task when the worker is busy rather than
+        // queueing it, so pressing Open while messages.getDialogs is still in
+        // flight gets messages.getHistory refused - the chat opens empty and
+        // the finishing dialog load then pulls the screen back to the list. A
+        // person is never this fast; a driver is. Known and deliberately
+        // deferred, so wait rather than work around it in the client.
+        Thread.sleep(6000);
+
+        boolean ok = openFirstChat(app);
+        if (ok) { ok = pageHistoryBack(app); }
+
+        // Back to the list before the next transition, so each one starts from
+        // the same place whatever the previous one did. Bounded, and stops as
+        // soon as Back changes nothing: the root screen still offers Back, it
+        // just has nowhere to go, so an unbounded loop here never ends.
+        ok = returnToDialogList(app) && ok;
+
+        if (sendText != null && sendText.length() > 0)
+        {
+            ok = sendToSavedMessages(app, sendText) && ok;
+        }
+        return ok;
+    }
+
+    /**
+     * How little heap this client actually needs, measured rather than assumed.
+     *
+     * Prints one verdict line per run so a sweep of -Xmx values reads as a
+     * table. Each stage is reported separately because they fail at different
+     * heights: an avatar in the dialog list is a decoded Image per row, inline
+     * thumbnails are another dozen, and a full photo is the single largest
+     * allocation the client ever makes. Which one goes first is the difference
+     * between "needs 5 MB" and "needs 5 MB if you want pictures".
+     *
+     * Everything is wrapped: at the bottom of the ladder the interesting
+     * outcome is a failure, and a driver that dies without printing its verdict
+     * has measured nothing.
+     */
+    private static boolean minheap(EmulatorHarness app, String chatTitle,
+                                   String pictures) throws Exception
+    {
+        boolean wantPictures = !"off".equalsIgnoreCase(pictures);
+        String connect = "fail";
+        String chat = "skip";
+        String photo = "skip";
+        int avatars = -1;
+
+        try
+        {
+            setPictures(app, wantPictures);
+            if (connect(app))
+            {
+                connect = "ok";
+                if (EmulatorHarness.command(app.current(), "Saved Messages") != null)
+                {
+                    // One step down and back before the count. The avatar
+                    // worker is driven from viewport events as well as from the
+                    // first paint, and a list nobody has touched sometimes
+                    // raises neither - which reads as "no avatars decoded" when
+                    // the truth is "nothing ever asked for one". Two runs at the
+                    // same heap disagreed on that alone. A person moves within a
+                    // second of the list appearing; so does this.
+                    Thread.sleep(1500);
+                    app.key(Canvas.KEY_NUM8);
+                    Thread.sleep(400);
+                    app.key(Canvas.KEY_NUM2);
+
+                    Thread.sleep(12000);        // dialogs plus the avatar workers
+                    avatars = count("task dialog avatar ok");
+                    dialogList = app.current();
+
+                    if (chatTitle != null && chatTitle.length() > 0)
+                    {
+                        if (openChatNamed(app, chatTitle))
+                        {
+                            Thread.sleep(20000);   // inline thumbnail decodes
+                            chat = EmulatorHarness.command(app.current(), "Older") != null
+                                    ? "ok" : "lost";
+                            if ("ok".equals(chat)) { photo = openOnePhoto(app); }
+                        }
+                        else { chat = "fail"; }
+                    }
+                }
+                else { connect = "no-session"; }
+            }
+        }
+        catch (Throwable t)
+        {
+            System.out.println("stage failed: " + t);
+        }
+
+        System.out.println("VERDICT"
+                + " ceiling=" + (MemoryBudget.ceiling() / 1024) + "KB"
+                + " pictures=" + (wantPictures ? "on" : "off")
+                + " connect=" + connect
+                + " avatars=" + avatars
+                + " chat=" + chat
+                + " photo=" + photo
+                + " sheds=" + MemoryPressure.shedEvents()
+                + " freed=" + (MemoryPressure.shedBytes() / 1024) + "KB"
+                + " headroom=" + (MemoryPressure.headroom() / 1024) + "KB"
+                + " oom=" + count("OutOfMemory")
+                + " oomBy=" + DiagTail.oomBreakdown()
+                + " thumbOk=" + count("thumbnail ok")
+                + " thumbFail=" + count("stripped thumbnail ")
+                // The two refusals. They are the point of the admission check:
+                // a run that reports these instead of OOMs has traded a wasted
+                // download for a placeholder, which is the whole trade.
+                + " thumbStop=" + count("thumbnails stopped")
+                + " avPaused=" + count("avatars paused")
+                + " ballast=" + (ballast == null ? 0 : ballast.length / 1024) + "KB"
+                + " lostLines=" + DiagTail.lostLines());
+        return "ok".equals(connect);
+    }
+
+    /** Activate messages until one opens a photo. Reports what happened. */
+    private static String openOnePhoto(EmulatorHarness app) throws Exception
+    {
+        for (int attempt = 0; attempt < 25; attempt++)
+        {
+            if (EmulatorHarness.command(app.current(), "Older") == null) { return "lost"; }
+            app.key(Canvas.KEY_NUM8);
+            Thread.sleep(150);
+            app.key(Canvas.KEY_NUM5);
+            Thread.sleep(3000);
+
+            if (EmulatorHarness.command(app.current(), "Zoom") != null)
+            {
+                Thread.sleep(15000);
+                boolean stillThere =
+                        EmulatorHarness.command(app.current(), "Zoom") != null;
+                app.press("Back");
+                app.awaitChange(app.current(), 5000);
+                return stillThere ? "ok" : "died";
+            }
+            if (app.current() instanceof Alert)
+            {
+                System.out.println("  photo refused: "
+                                   + EmulatorHarness.describe(app.current()));
+                dismissAlert(app);
+                return "refused";
+            }
+            if (EmulatorHarness.command(app.current(), "Older") == null)
+            {
+                app.press("Back");
+                app.awaitChange(app.current(), 5000);
+            }
+        }
+        return "none";
+    }
+
+    /**
+     * The markers every scenario reports on, registered before the client
+     * starts.
+     *
+     * Counted as lines arrive rather than by rescanning at the end. The
+     * difference is not stylistic: this runs inside the heap being measured, and
+     * a verdict line that rescans the whole log four times was enough to end a
+     * ballasted run in {@code GC overhead limit exceeded} before the client had
+     * finished connecting.
+     */
+    private static void startDiagTail(String scenario) throws Exception
+    {
+        DiagTail.watch("OutOfMemory");
+        DiagTail.watch("task dialog avatar ok");
+        DiagTail.watch("thumbnail ok");
+        DiagTail.watch("stripped thumbnail ");
+        DiagTail.watch("thumbnails stopped");
+        DiagTail.watch("avatars paused");
+        DiagTail.watch("shed level");
+
+        String path = System.getProperty("tg.driver.diaglog");
+        File target = path != null && path.length() > 0
+                ? new File(path)
+                : File.createTempFile("tg-diag-" + scenario + "-", ".log");
+        File written = DiagTail.start(target);
+        if (written != null)
+        {
+            System.out.println("diagnostic tail -> " + written.getAbsolutePath());
+        }
+    }
+
+    /**
+     * Count diagnostic lines containing a marker, over the whole run.
+     *
+     * Reads {@link DiagTail} rather than {@link Diag#snapshot}. That distinction
+     * is the reason this class changed at all: the counts that matter are taken
+     * at the bottom of a heap ladder, where thirty error lines have long since
+     * pushed every success out of a hundred-line ring, and a zero from the ring
+     * means "not in the last hundred lines", not "did not happen".
+     */
+    private static int count(String marker)
+    {
+        return DiagTail.count(marker);
+    }
+
+    /**
+     * Turn dialog-list avatars and inline thumbnails on or off.
+     *
+     * Both are decoded Images the client holds for as long as the screen lives,
+     * and they are the first things worth giving up on a small handset - which
+     * is why the settings exist at all. Set explicitly on every run: they
+     * persist in RMS, so an unset run inherits whatever the previous one chose.
+     */
+    private static boolean setPictures(EmulatorHarness app, boolean on)
+            throws Exception
+    {
+        Displayable start = app.current();
+        if (!app.press("Settings")) { System.out.println("no Settings"); return false; }
+        Displayable settings = app.awaitChange(start, 5000);
+        if (!(settings instanceof Form)) { return false; }
+        Form form = (Form) settings;
+
+        for (int i = 0; i < form.size(); i++)
+        {
+            Item item = form.get(i);
+            if (!(item instanceof ChoiceGroup)) { continue; }
+            ChoiceGroup group = (ChoiceGroup) item;
+            String label = group.getLabel();
+            if ("Chat avatars".equals(label))
+            {
+                group.setSelectedIndex(on ? 0 : 1, true);      // Load / Off
+            }
+            else if ("Media previews".equals(label))
+            {
+                group.setSelectedIndex(on ? 0 : 1, true);      // thumbnail / text
+            }
+        }
+        System.out.println("pictures: " + (on ? "on" : "off"));
+        if (!app.press("Save")) { return false; }
+        app.awaitChange(settings, 5000);
+        for (int i = 0; i < 4 && app.press("Back"); i++)
+        {
+            app.awaitChange(app.current(), 2000);
+        }
+        return true;
+    }
+
+    /**
+     * Open a picture-heavy conversation and decode as many photos as it offers.
+     *
+     * This is the scenario the memory work actually has to survive. Each photo
+     * is a download plus a full decode whose peak the budget estimates before
+     * committing, and every inline thumbnail is another decoded Image held by
+     * the chat screen - so it is also the only way to make the pressure ladder
+     * fire on anything but a contrived heap.
+     */
+    private static boolean photos(EmulatorHarness app, String chatTitle)
+            throws Exception
+    {
+        if (chatTitle == null || chatTitle.length() == 0)
+        {
+            System.out.println("usage: photos <chat title>");
+            return false;
+        }
+        if (!connect(app)) { return false; }
+        if (EmulatorHarness.command(app.current(), "Saved Messages") == null)
+        {
+            System.out.println("no stored session; run the login scenario first");
+            return false;
+        }
+        Thread.sleep(6000);          // let messages.getDialogs finish
+        dialogList = app.current();
+
+        if (!openChatNamed(app, chatTitle)) { return false; }
+        // Inline thumbnails are decoded on their own worker after the history
+        // lands; give them room to actually happen.
+        Thread.sleep(20000);
+        System.out.println("after thumbnails: " + EmulatorHarness.describe(app.current()));
+        report("thumbnails decoded");
+
+        int opened = 0;
+        for (int attempt = 0; attempt < 30 && opened < 6; attempt++)
+        {
+            if (EmulatorHarness.command(app.current(), "Older") == null)
+            {
+                System.out.println("lost the chat screen: "
+                                   + EmulatorHarness.describe(app.current()));
+                break;
+            }
+            app.key(Canvas.KEY_NUM8);          // move focus one message down
+            Thread.sleep(150);
+            app.key(Canvas.KEY_NUM5);          // activate it
+            Thread.sleep(2500);
+
+            if (EmulatorHarness.command(app.current(), "Zoom") != null)
+            {
+                opened++;
+                System.out.println("photo " + opened + " open, waiting for the decode");
+                Thread.sleep(12000);
+                System.out.println("  " + EmulatorHarness.describe(app.current()));
+                report("photo " + opened);
+                app.press("Back");
+                app.awaitChange(app.current(), 5000);
+            }
+            else if (app.current() instanceof Alert)
+            {
+                System.out.println("refused: " + EmulatorHarness.describe(app.current()));
+                dismissAlert(app);
+            }
+            else if (EmulatorHarness.command(app.current(), "Older") == null)
+            {
+                // A reaction palette or profile screen; step back out.
+                app.press("Back");
+                app.awaitChange(app.current(), 5000);
+            }
+        }
+        System.out.println("photos opened: " + opened);
+        return opened > 0;
+    }
+
+    /**
+     * Read a conversation backwards and watch what it costs.
+     *
+     * This is the scenario issue #4 exists for, and the three numbers that
+     * matter are all invisible from the screen:
+     *
+     *   - the laid-out line count, which is what makes the memory bounded. It
+     *     has to stop growing, not merely grow slowly;
+     *   - the number of {@code messages.getHistory/older} requests, which has to
+     *     track pages scrolled rather than keys pressed;
+     *   - the number of transcript reflows, which is the same claim from the
+     *     other side: a reader crossing an eviction boundary should reflow once.
+     *
+     * The descent afterwards is not decoration. Oscillating across a boundary is
+     * where a naive window turns into a fetch storm, and it is the one failure
+     * mode a person clicking Older could never have produced.
+     */
+    private static boolean scroll(EmulatorHarness app, String chatTitle,
+                                  String pagesArg, String singleSocket)
+            throws Exception
+    {
+        int pages = 40;
+        try { if (pagesArg != null) { pages = Integer.parseInt(pagesArg.trim()); } }
+        catch (Throwable ignored) { }
+
+        boolean single = "single".equalsIgnoreCase(singleSocket);
+        if (!setSingleSocket(app, single)) { return false; }
+        if (!connect(app)) { return false; }
+        if (EmulatorHarness.command(app.current(), "Saved Messages") == null)
+        {
+            System.out.println("no stored session; run the login scenario first");
+            return false;
+        }
+        Thread.sleep(6000);          // let messages.getDialogs finish
+        dialogList = app.current();
+
+        if (!openChatNamed(app, chatTitle)) { return false; }
+        Thread.sleep(8000);          // the first page, wrapped
+
+        ChatScreen chat = chatScreen(app);
+        if (chat == null)
+        {
+            System.out.println("the chat screen did not survive opening");
+            return false;
+        }
+
+        int openLines = chat.transcriptLineCount();
+        int openLayouts = chat.layoutCount();
+        System.out.println("opened: lines=" + openLines
+                + " messages=" + chat.messageCount()
+                + " window=" + chat.windowScreens() + " screens"
+                + " layouts=" + openLayouts);
+
+        int maxLines = openLines;
+        int reached = 0;
+        for (int i = 0; i < pages; i++)
+        {
+            ChatScreen live = chatScreen(app);
+            if (live == null)
+            {
+                System.out.println("lost the chat screen on page up " + i);
+                break;
+            }
+            chat = live;
+            app.key(Canvas.KEY_NUM4);
+            // Long enough for a page to land on a real connection. Too short
+            // and this measures the driver rather than the client.
+            Thread.sleep(1200);
+            int lines = chat.transcriptLineCount();
+            if (lines > maxLines) { maxLines = lines; }
+            reached = i + 1;
+            if ((i + 1) % 5 == 0)
+            {
+                System.out.println("  up " + (i + 1) + ": lines=" + lines
+                        + " messages=" + chat.messageCount()
+                        + " older=" + chat.messagesOlderThanViewport()
+                        + " layouts=" + chat.layoutCount()
+                        + " fetches=" + count("messages.getHistory/older")
+                        + " thumbs=" + thumbnailsHeld(chat)
+                        + "/" + thumbnailCandidates(chat)
+                        + " headroom=" + (MemoryPressure.headroom() / 1024) + "KB");
+            }
+        }
+
+        int upFetches = count("messages.getHistory/older started");
+        int upLayouts = chat.layoutCount();
+        System.out.println("turning round after " + reached + " pages up");
+
+        // Down again, further than we came up. The retention window is smaller
+        // than the distance covered, so getting back to the present means
+        // fetching messages that were already loaded once and then evicted -
+        // and that is exactly the path a person takes after reading history.
+        int downPages = reached + 20;
+        for (int i = 0; i < downPages; i++)
+        {
+            ChatScreen live = chatScreen(app);
+            if (live == null) { break; }
+            chat = live;
+            app.key(Canvas.KEY_NUM6);
+            Thread.sleep(1200);
+            int lines = chat.transcriptLineCount();
+            if (lines > maxLines) { maxLines = lines; }
+            if ((i + 1) % 10 == 0)
+            {
+                System.out.println("  down " + (i + 1) + ": lines=" + lines
+                        + " newer=" + chat.messagesNewerThanViewport()
+                        + " atEnd=" + chat.isAtEnd()
+                        + " forward=" + count("messages.getHistory/newer started")
+                        + " layouts=" + chat.layoutCount());
+            }
+        }
+
+        boolean alive = chatScreen(app) != null;
+        boolean returned = alive && chat.isAtEnd();
+        int forwardFetches = count("messages.getHistory/newer started");
+        // Clamped because Diag is a bounded ring: on a long run the lines
+        // counted at the turn-round can age out of it, and a negative delta
+        // reads as a defect when it is only the log forgetting.
+        int downFetches = Math.max(0,
+                count("messages.getHistory/older started") - upFetches);
+        System.out.println("VERDICT"
+                + " single=" + single
+                + " pages=" + reached
+                + " openLines=" + openLines
+                + " maxLines=" + maxLines
+                + " messages=" + chat.messageCount()
+                + " upFetches=" + upFetches
+                + " downFetches=" + downFetches
+                + " forwardFetches=" + forwardFetches
+                + " upLayouts=" + (upLayouts - openLayouts)
+                + " downLayouts=" + (chat.layoutCount() - upLayouts)
+                + " returnedToEnd=" + returned
+                + " thumbs=" + thumbnailsHeld(chat) + "/" + thumbnailCandidates(chat)
+                + " thumbOk=" + count("thumbnail ok")
+                + " thumbDropped=" + count("thumbnail dropped")
+                + " thumbCancelled=" + count("thumbnails cancelled")
+                + " busy=" + count("worker busy")
+                + " sheds=" + MemoryPressure.shedEvents()
+                + " headroom=" + (MemoryPressure.headroom() / 1024) + "KB"
+                + " oom=" + count("OutOfMemory")
+                + " alive=" + alive);
+
+        // The bound is what is being claimed, so it is what is checked. Two
+        // windows of slack: a rebuild can legitimately land on a run of
+        // picture messages that wrap taller than the ones it replaced.
+        boolean bounded = maxLines <= openLines * 3 + 40;
+        if (!bounded)
+        {
+            System.out.println("FAIL: the laid-out transcript grew from "
+                    + openLines + " to " + maxLines);
+        }
+        if (!alive) { System.out.println("FAIL: the chat screen did not survive"); }
+        if (!returned)
+        {
+            System.out.println("FAIL: scrolling forward did not get back to the"
+                    + " newest message - evicted blocks are not coming back");
+        }
+        return alive && bounded && returned && count("OutOfMemory") == 0;
+    }
+
+    /**
+     * Scroll the chat list to its end and back, and watch what it costs.
+     *
+     * This is the scenario issue #6 exists for. Everything it reports is
+     * invisible from the screen:
+     *
+     *   - the reader's absolute position, which has to keep climbing past the
+     *     retention cap. Stopping at the cap is the wall this change exists to
+     *     remove, and it would look exactly like success from the retained
+     *     count alone;
+     *   - the retained count, which has to stop growing. It is a window: if it
+     *     tracks the position, memory still depends on how far somebody
+     *     scrolled and a long chat list is an OutOfMemoryError with extra
+     *     steps;
+     *   - requests against pages scrolled. One per few pages is the margin
+     *     doing its job; one per page is a margin too wide to be a prefetch,
+     *     and more than one per page is a fetch storm;
+     *   - whether the way back up works. Runs dropped off the top have to come
+     *     back, one request each, and the reader has to arrive at row zero -
+     *     messages.getDialogs pages downwards only, so this is the half that
+     *     could quietly not work.
+     *
+     * Read-only by construction: it never opens a chat, so nothing is marked
+     * read and nothing is sent.
+     */
+    private static boolean chats(EmulatorHarness app, String pagesArg,
+                                 String pictures) throws Exception
+    {
+        int pages = 40;
+        try { if (pagesArg != null) { pages = Integer.parseInt(pagesArg.trim()); } }
+        catch (Throwable ignored) { }
+
+        if (!setPictures(app, !"off".equalsIgnoreCase(pictures))) { return false; }
+        if (!connect(app)) { return false; }
+        if (EmulatorHarness.command(app.current(), "Saved Messages") == null)
+        {
+            System.out.println("no stored session; run the login scenario first");
+            return false;
+        }
+        Thread.sleep(8000);          // the first page, and its avatars
+        dialogList = app.current();
+
+        DialogListScreen list = dialogScreen(app);
+        if (list == null)
+        {
+            System.out.println("not the dialog list: "
+                    + EmulatorHarness.describe(app.current()));
+            return false;
+        }
+
+        int openCount = list.dialogCount();
+        int cap = MemoryBudget.maxDialogs();
+        long usedAtOpen = usedHeap();
+        System.out.println("opened: retained=" + openCount
+                + " total=" + list.totalCount()
+                + " cap=" + cap
+                + " rows=" + list.visibleRows()
+                + " used=" + (usedAtOpen / 1024) + "KB");
+
+        int maxRetained = openCount;
+        int deepest = 0;
+        int anchorSlips = 0;
+        int reached = 0;
+        for (int i = 0; i < pages; i++)
+        {
+            DialogListScreen live = dialogScreen(app);
+            if (live == null)
+            {
+                System.out.println("lost the dialog list on page down " + i);
+                break;
+            }
+            list = live;
+            app.key(Canvas.KEY_NUM6);            // one screen down
+            // Long enough for a page to land on a real connection. Too short
+            // and this measures the driver rather than the client.
+            String before = peerKey(list.selectedPeer());
+            Thread.sleep(1200);
+            // Nothing was pressed during that sleep, so a selection that moved
+            // is the list reordering under the reader - a message arriving in
+            // some chat and promoting it. Anchoring on the peer is what is
+            // supposed to make that a no-op for whoever is reading.
+            if (!before.equals(peerKey(list.selectedPeer()))) { anchorSlips++; }
+            if (list.dialogCount() > maxRetained) { maxRetained = list.dialogCount(); }
+            int at = list.windowStart() + list.selectedIndex();
+            if (at > deepest) { deepest = at; }
+            reached = i + 1;
+            if ((i + 1) % 10 == 0)
+            {
+                System.out.println("  down " + (i + 1)
+                        + ": at=" + at + "/" + list.totalCount()
+                        + " window=" + list.windowStart()
+                        + "+" + list.dialogCount()
+                        + " fetches=" + count("messages.getDialogs/more started")
+                        + " back=" + count("messages.getDialogs/back started")
+                        + " headroom=" + (MemoryPressure.headroom() / 1024) + "KB");
+            }
+        }
+
+        int downFetches = count("messages.getDialogs/more started");
+        long heapDelta = usedHeap() - usedAtOpen;
+        System.out.println("turning round at row " + deepest + " after "
+                + reached + " pages down");
+
+        // Back up, further than we came down. This is the half that could
+        // quietly not work: everything above the window was dropped, and
+        // messages.getDialogs cannot ask for it directly.
+        int upPages = reached + 20;
+        for (int i = 0; i < upPages; i++)
+        {
+            DialogListScreen live = dialogScreen(app);
+            if (live == null) { break; }
+            list = live;
+            app.key(Canvas.KEY_NUM4);
+            Thread.sleep(1200);
+            if (list.dialogCount() > maxRetained) { maxRetained = list.dialogCount(); }
+            if ((i + 1) % 10 == 0)
+            {
+                System.out.println("  up " + (i + 1)
+                        + ": at=" + (list.windowStart() + list.selectedIndex())
+                        + " window=" + list.windowStart()
+                        + "+" + list.dialogCount()
+                        + " back=" + count("messages.getDialogs/back started"));
+            }
+        }
+
+        boolean alive = dialogScreen(app) != null;
+        int landedAt = alive ? list.windowStart() + list.selectedIndex() : -1;
+        boolean returnedToTop = landedAt == 0;
+        int backFetches = count("messages.getDialogs/back started");
+
+        System.out.println("VERDICT"
+                + " pages=" + reached
+                + " openRetained=" + openCount
+                + " maxRetained=" + maxRetained
+                + " cap=" + cap
+                + " total=" + list.totalCount()
+                + " deepest=" + deepest
+                + " landedAt=" + landedAt
+                + " fetches=" + downFetches
+                + " backFetches=" + backFetches
+                // Raw, and deliberately not divided by anything. Everything
+                // the run allocated is in here - avatars, peer-cache entries,
+                // the garbage of parsing a TL response, and on an unbounded
+                // host JVM whatever the collector had not got round to. All of
+                // it is budgeted elsewhere; none of it is what a row costs.
+                // dialogBytes on the probe line is the row itself, weighed.
+                + " heapDelta=" + (heapDelta / 1024) + "KB"
+                + " anchorSlips=" + anchorSlips
+                + " returnedToTop=" + returnedToTop
+                + " busy=" + count("worker busy")
+                + " pageFailed=" + count("dialog page failed")
+                + " backFailed=" + count("dialog page back failed")
+                + " sheds=" + MemoryPressure.shedEvents()
+                + " headroom=" + (MemoryPressure.headroom() / 1024) + "KB"
+                + " oom=" + count("OutOfMemory")
+                + " alive=" + alive);
+
+        // Each of these is a way of getting it wrong that would still look
+        // like it worked from one of the other numbers.
+        boolean scrolled = deepest > openCount;
+        boolean bounded = maxRetained <= cap;
+        boolean pastTheCap = list.totalCount() <= cap || deepest >= cap;
+        boolean stormFree = downFetches <= reached;
+        boolean cameBack = returnedToTop || deepest < openCount;
+
+        if (!scrolled)
+        {
+            System.out.println("FAIL: never got past the first page ("
+                    + openCount + ") - nothing is being fetched on scroll");
+        }
+        if (!bounded)
+        {
+            System.out.println("FAIL: retained " + maxRetained + " rows against"
+                    + " a window of " + cap + " - memory still depends on how"
+                    + " far somebody scrolled");
+        }
+        if (!pastTheCap)
+        {
+            System.out.println("FAIL: stopped at row " + deepest + " with a cap"
+                    + " of " + cap + " and " + list.totalCount() + " chats -"
+                    + " the wall moved rather than went");
+        }
+        if (!stormFree)
+        {
+            System.out.println("FAIL: " + downFetches + " requests for "
+                    + reached + " pages - the margin is provoking a fetch"
+                    + " per keypress");
+        }
+        if (!cameBack)
+        {
+            System.out.println("FAIL: paging up ended at row " + landedAt
+                    + " rather than 0 - runs dropped off the top are not"
+                    + " coming back");
+        }
+        if (!alive) { System.out.println("FAIL: the dialog list did not survive"); }
+        return alive && scrolled && bounded && pastTheCap && stormFree
+                && cameBack && count("OutOfMemory") == 0;
+    }
+
+    /**
+     * Ask the server whether it honours a {@code messages.getDialogs} hash.
+     *
+     * Here rather than in the live harness because the only signed-in
+     * production session on this machine is the emulator's record store, and
+     * {@code RmsAuthKeyStore} needs the MIDlet bridge that
+     * {@code EmulatorHarness.install} has already put in place.
+     *
+     * Deliberately does not start the client. It opens its own connection on
+     * the same auth key - which MTProto allows, and which is what keeps the
+     * measurement clear of avatar traffic and update polling - and it only ever
+     * lists dialogs.
+     *
+     * @return a process exit code: 0 a vector was found, 3 a clean negative,
+     *         2 nothing could be concluded
+     */
+    private static int hashProbe(String limitArg) throws Exception
+    {
+        int limit = 30;
+        try { if (limitArg != null) { limit = Integer.parseInt(limitArg.trim()); } }
+        catch (Throwable ignored) { }
+
+        SeTransport transport = new SeTransport();
+        transport.setReadTimeoutMs(60000);
+        Telegram tg = new Telegram(transport, new Rng(), new RmsAuthKeyStore());
+        // FixedLinkFactory is direct-only; the stored mode is whatever the
+        // profile last connected with, which on a build carrying a compiled-in
+        // MTProxy is MTProxy. Set it back after the config has been loaded.
+        tg.connectionConfig().mode = ConnectionConfig.DIRECT;
+        try
+        {
+            tg.connect();
+            System.out.println("connected to dc" + tg.dcId()
+                    + " (" + (Dc.isTest() ? "test" : "production") + ")");
+            if (tg.checkAuthorization() == null)
+            {
+                System.out.println("no session in this profile; run the login"
+                        + " scenario first");
+                return 2;
+            }
+            int winner = LiveDialogHashTest.probe(tg, transport, limit);
+            System.out.println("bytes rx/tx : " + transport.bytesRead()
+                    + " / " + transport.bytesWritten());
+            if (winner >= 0) { return 0; }
+            return winner == LiveDialogHashTest.NONE ? 3 : 2;
+        }
+        finally
+        {
+            try { tg.close(); } catch (Throwable ignored) { }
+        }
+    }
+
+    /** The live dialog list, or null if something else is showing. */
+    private static DialogListScreen dialogScreen(EmulatorHarness app)
+            throws Exception
+    {
+        Displayable now = app.current();
+        return now instanceof DialogListScreen ? (DialogListScreen) now : null;
+    }
+
+    /**
+     * Live heap in use, after a collect.
+     *
+     * The one place in this driver that forces a collection. Bytes per dialog
+     * is being measured, and uncollected garbage from avatar decodes is larger
+     * than the thing being weighed.
+     */
+    private static long usedHeap()
+    {
+        Runtime rt = Runtime.getRuntime();
+        for (int i = 0; i < 3; i++)
+        {
+            rt.gc();
+            try { Thread.sleep(120); } catch (InterruptedException ignored) { }
+        }
+        return rt.totalMemory() - rt.freeMemory();
+    }
+
+    /**
+     * A peer as an opaque key.
+     *
+     * Only ever compared with itself. Deliberately not the title: these lines
+     * are printed, and a chat list is somebody's address book.
+     */
+    private static String peerKey(Peer peer)
+    {
+        return peer == null ? "-" : (peer.kind + ":" + peer.id);
+    }
+
+    /** The live chat screen, or null if something else is showing. */
+    private static ChatScreen chatScreen(EmulatorHarness app) throws Exception
+    {
+        Displayable now = app.current();
+        return now instanceof ChatScreen ? (ChatScreen) now : null;
+    }
+
+    /**
+     * Turn single socket mode on or off before connecting.
+     *
+     * The mode that matters most and is exercised least: it refuses a second
+     * concurrent connection outright, so any path that quietly assumed it could
+     * open one fails there and only there. Set explicitly on every run, because
+     * it persists in RMS and an unset run inherits the previous one's choice.
+     */
+    private static boolean setSingleSocket(EmulatorHarness app, boolean on)
+            throws Exception
+    {
+        Displayable start = app.current();
+        if (!app.press("Settings")) { System.out.println("no Settings"); return false; }
+        Displayable settings = app.awaitChange(start, 5000);
+        if (!(settings instanceof Form))
+        {
+            System.out.println("Settings is not a Form: "
+                    + EmulatorHarness.describe(settings));
+            return false;
+        }
+        Form form = (Form) settings;
+        boolean found = false;
+        for (int i = 0; i < form.size(); i++)
+        {
+            Item item = form.get(i);
+            if (item instanceof ChoiceGroup
+                    && "Single socket mode".equals(item.getLabel()))
+            {
+                ((ChoiceGroup) item).setSelectedIndex(0, on);
+                found = true;
+            }
+        }
+        if (!found)
+        {
+            System.out.println("no Single socket mode choice on Settings");
+            return false;
+        }
+        System.out.println("single socket: " + (on ? "on" : "off"));
+        if (!app.press("Save")) { return false; }
+        app.awaitChange(settings, 5000);
+        for (int i = 0; i < 4 && app.press("Back"); i++)
+        {
+            app.awaitChange(app.current(), 2000);
+        }
+        return true;
+    }
+
+    /** Inline previews actually decoded and held for what is on screen. */
+    private static int thumbnailsHeld(ChatScreen chat)
+    {
+        if (chat == null) { return 0; }
+        tg.api.Message[] visible = chat.visibleMessages();
+        int held = 0;
+        for (int i = 0; i < visible.length; i++)
+        {
+            tg.api.Message m = visible[i];
+            if (m != null && chat.hasThumbnail(m.id)) { held++; }
+        }
+        return held;
+    }
+
+    /** Messages on screen that carry a stripped thumbnail worth decoding. */
+    private static int thumbnailCandidates(ChatScreen chat)
+    {
+        if (chat == null) { return 0; }
+        tg.api.Message[] visible = chat.visibleMessages();
+        int candidates = 0;
+        for (int i = 0; i < visible.length; i++)
+        {
+            tg.api.Message m = visible[i];
+            if (m != null && m.media != null
+                    && m.media.kind == tg.api.Media.PHOTO
+                    && m.media.photo != null
+                    && m.media.photo.stripped() != null)
+            {
+                candidates++;
+            }
+        }
+        return candidates;
+    }
+
+    /** Walk the dialog list with the keypad until the wanted chat is selected. */
+    private static boolean openChatNamed(EmulatorHarness app, String title)
+            throws Exception
+    {
+        Displayable list = app.current();
+        if (!(list instanceof DialogListScreen))
+        {
+            System.out.println("not the dialog list: " + EmulatorHarness.describe(list));
+            return false;
+        }
+        DialogListScreen screen = (DialogListScreen) list;
+        for (int i = 0; i < 250; i++)
+        {
+            Peer peer = screen.selectedPeer();
+            String name = peer == null ? null : peer.title;
+            if ((title == null || title.length() == 0)
+                    || (name != null && name.indexOf(title) >= 0))
+            {
+                System.out.println("selected requested chat (title withheld)");
+                if (!app.press("Open")) { System.out.println("no Open"); return false; }
+                Displayable chat = app.awaitChange(list, 60000);
+                System.out.println("opened requested chat");
+                return app.awaitCommand("Older", 60000);
+            }
+            if (!app.key(Canvas.KEY_NUM8)) { break; }
+            Thread.sleep(60);
+        }
+        System.out.println("requested chat was not found (title withheld)");
+        return false;
+    }
+
+    /** One line of memory state, for correlating a step with what it cost. */
+    private static void report(String what)
+    {
+        System.out.println("  [" + what + "] headroom="
+                + (MemoryPressure.headroom() / 1024) + "KB sheds="
+                + MemoryPressure.shedEvents() + " freed="
+                + (MemoryPressure.shedBytes() / 1024) + "KB");
+    }
+
+    /**
+     * Step past a modal alert.
+     *
+     * Alerts here are Alert.FOREVER and this harness has no UI to dismiss one
+     * with, so pressing OK is not enough - the display has to be pointed
+     * somewhere else. Only ever used after the alert's text has been reported.
+     */
+    private static void dismissAlert(EmulatorHarness app) throws Exception
+    {
+        if (!(app.current() instanceof Alert)) { return; }
+        app.press("OK");
+        for (int waited = 0; waited < 3000 && app.current() instanceof Alert;
+             waited += 100)
+        {
+            Thread.sleep(100);
+        }
+        if (app.current() instanceof Alert && dialogList != null)
+        {
+            app.show(dialogList);
+            for (int waited = 0; waited < 3000 && app.current() instanceof Alert;
+                 waited += 100)
+            {
+                Thread.sleep(100);
+            }
+        }
+    }
+
+    /**
+     * Walk Back until the dialog list is showing.
+     *
+     * Bounded and change-sensitive on purpose. The root screen still offers a
+     * Back command that does nothing, so "press Back while there is one" spins
+     * forever.
+     */
+    /**
+     * The three navigations a handset session found broken, in one run.
+     *
+     * All three are transitions rather than requests, which is why none of them
+     * had automated coverage: the desktop suite can prove what a page merge
+     * does to an array and cannot press Back. What is checked here is the thing
+     * a person noticed - that the screen afterwards is the screen it should be,
+     * and that the client is still running.
+     *
+     * <ol>
+     * <li><b>Search, then Back.</b> The results screen used to replace the
+     *     screen <em>underneath</em> the query box rather than the box itself,
+     *     so a search started from the chat list made the results the root -
+     *     and Back on a root screen is how this MIDlet exits. It read as a
+     *     crash on the handset and left nothing in the crash log, because
+     *     nothing had thrown. The assertion is simply: after Back, the client
+     *     is alive and on the chat list.</li>
+     * <li><b>Jump to latest.</b> It was gated on the same in-flight latch the
+     *     scroll prefetch sets, which on this heap fires every seven messages -
+     *     so on a slow link the answer to an explicit action was "already
+     *     loading...", repeatedly. The assertion is that the status line stops
+     *     saying it is loading.</li>
+     * <li><b>First unread.</b> Same gate, and it also has to answer locally
+     *     when there is nothing unread rather than spending a round trip.</li>
+     * </ol>
+     *
+     * @param query what to search for; a name the account is likely to match
+     */
+    private static boolean navigate(EmulatorHarness app, String modeLabel,
+                                    String query) throws Exception
+    {
+        if (modeLabel != null && modeLabel.length() > 0
+                && !setMode(app, modeLabel)) { return false; }
+        if (!connect(app)) { return false; }
+        if (EmulatorHarness.command(app.current(), "Saved Messages") == null)
+        {
+            System.out.println("no stored session; run the login scenario first");
+            return false;
+        }
+
+        // The same wait the session scenario takes, for the same reason: a
+        // driver presses Open before messages.getDialogs has come back, and the
+        // worker drops rather than queues.
+        Thread.sleep(6000);
+
+        boolean ok = searchThenBack(app, query);
+        ok = jumpActions(app) && ok;
+        return ok;
+    }
+
+    /**
+     * Find chat, then Back. The client has to still be here afterwards.
+     */
+    private static boolean searchThenBack(EmulatorHarness app, String query)
+            throws Exception
+    {
+        if (!returnToDialogList(app)) { return false; }
+        if (query == null || query.length() < 2) { query = "te"; }
+
+        if (!app.press("Find chat"))
+        {
+            System.out.println("NAVIGATE FAIL: no Find chat command on the list");
+            return false;
+        }
+        if (!app.awaitCommand("Search", 5000))
+        {
+            System.out.println("NAVIGATE FAIL: the query box did not appear");
+            return false;
+        }
+        app.type(query);
+        Displayable box = app.current();
+        app.press("Search");
+
+        // The request is real, so give it a GPRS-shaped window.
+        app.awaitChange(box, 20000);
+        Thread.sleep(2000);
+        report("search results: " + EmulatorHarness.describe(app.current()));
+
+        Displayable results = app.current();
+        if (!app.press("Back"))
+        {
+            System.out.println("NAVIGATE FAIL: no Back on the results screen");
+            return false;
+        }
+        app.awaitChange(results, 5000);
+
+        // The one that matters. If the results had become the root, Back has
+        // just destroyed the MIDlet and there is no current screen at all.
+        if (app.current() == null)
+        {
+            System.out.println("NAVIGATE FAIL: Back from search left no screen -"
+                               + " the MIDlet exited");
+            return false;
+        }
+        if (EmulatorHarness.command(app.current(), "Saved Messages") == null)
+        {
+            System.out.println("NAVIGATE FAIL: Back from search landed on "
+                               + EmulatorHarness.describe(app.current())
+                               + ", not the chat list");
+            return false;
+        }
+        report("back from search: on the chat list, client alive");
+        return true;
+    }
+
+    /** Jump to latest and First unread, in a chat, without either being refused. */
+    private static boolean jumpActions(EmulatorHarness app) throws Exception
+    {
+        if (!returnToDialogList(app)) { return false; }
+        if (!openFirstChat(app)) { return false; }
+
+        boolean ok = true;
+        if (!app.press("Jump to latest"))
+        {
+            System.out.println("NAVIGATE FAIL: no Jump to latest command");
+            ok = false;
+        }
+        else
+        {
+            Thread.sleep(8000);
+            String status = chatStatus(app);
+            report("after Jump to latest: status=" + status);
+            if (status.indexOf("already loading") >= 0)
+            {
+                System.out.println("NAVIGATE FAIL: Jump to latest was refused by"
+                                   + " the prefetch latch");
+                ok = false;
+            }
+        }
+
+        if (!app.press("First unread"))
+        {
+            System.out.println("NAVIGATE FAIL: no First unread command");
+            ok = false;
+        }
+        else
+        {
+            Thread.sleep(8000);
+            String status = chatStatus(app);
+            report("after First unread: status=" + status);
+            if (status.indexOf("already loading") >= 0)
+            {
+                System.out.println("NAVIGATE FAIL: First unread was refused by"
+                                   + " the prefetch latch");
+                ok = false;
+            }
+        }
+
+        ok = returnToDialogList(app) && ok;
+        return ok;
+    }
+
+    /** The chat screen status line, or "" when that is not what is showing. */
+    private static String chatStatus(EmulatorHarness app)
+    {
+        Displayable screen = app.current();
+        if (screen instanceof tg.ui.ChatScreen)
+        {
+            String status = ((tg.ui.ChatScreen) screen).status();
+            return status == null ? "" : status;
+        }
+        return "";
+    }
+
+    private static boolean returnToDialogList(EmulatorHarness app) throws Exception
+    {
+        dismissAlert(app);
+        for (int i = 0; i < 6; i++)
+        {
+            if (EmulatorHarness.command(app.current(), "Saved Messages") != null)
+            {
+                return true;
+            }
+            Displayable before = app.current();
+            if (!app.press("Back")) { break; }
+            app.awaitChange(before, 3000);
+            if (app.current() == before) { break; }
+        }
+        boolean back = EmulatorHarness.command(app.current(), "Saved Messages") != null;
+        if (!back)
+        {
+            System.out.println("could not get back to the dialog list: "
+                               + EmulatorHarness.describe(app.current()));
+        }
+        return back;
+    }
+
+    /** Open a conversation - the most memory-expensive transition there is. */
+    private static boolean openFirstChat(EmulatorHarness app) throws Exception
+    {
+        Displayable list = app.current();
+        dialogList = list;
+        System.out.println("chat list: " + EmulatorHarness.describe(list));
+        if (!app.press("Open"))
+        {
+            System.out.println("no Open command; commands: " + app.labels());
+            return false;
+        }
+        Displayable chat = app.awaitChange(list, 60000);
+        System.out.println("opened: " + EmulatorHarness.describe(chat));
+        if (!app.awaitCommand("Older", 60000))
+        {
+            System.out.println("chat screen never offered Older: "
+                               + EmulatorHarness.describe(app.current()));
+            return false;
+        }
+        Thread.sleep(8000);          // let the history land and wrap
+        Displayable after = app.current();
+        System.out.println("after history: " + EmulatorHarness.describe(after));
+        if (EmulatorHarness.command(after, "Older") == null)
+        {
+            System.out.println("the chat screen did not survive loading its"
+                               + " history - see the crash log below");
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * Page history backwards.
+     *
+     * This is the loop the retention budget actually governs: every page merges
+     * into openHistory until maxHistory() truncates it, and each request is
+     * preceded by a MemoryPressure.reserve on the worker thread.
+     */
+    private static boolean pageHistoryBack(EmulatorHarness app) throws Exception
+    {
+        for (int page = 1; page <= 4; page++)
+        {
+            if (!app.press("Older"))
+            {
+                System.out.println("no Older command on "
+                                   + EmulatorHarness.describe(app.current()));
+                return false;
+            }
+            Thread.sleep(6000);
+            Displayable now = app.current();
+            System.out.println("older page " + page + ": "
+                               + EmulatorHarness.describe(now));
+            // The limit alert is a success, not a failure: it is the budget
+            // saying so out loud.
+            if (now instanceof Alert) { dismissAlert(app); break; }
+        }
+        return true;
+    }
+
+    /**
+     * Send one message to Saved Messages.
+     *
+     * Deliberately the user own self-chat: the send path has to be exercised
+     * against a real account, and nobody else should receive a test message.
+     */
+    private static boolean sendToSavedMessages(EmulatorHarness app, String text)
+            throws Exception
+    {
+        Displayable list = app.current();
+        if (!app.press("Saved Messages"))
+        {
+            System.out.println("no Saved Messages command; commands: " + app.labels());
+            return false;
+        }
+        Displayable chat = app.awaitChange(list, 60000);
+        System.out.println("saved messages: " + EmulatorHarness.describe(chat));
+        if (!app.awaitCommand("Write", 30000))
+        {
+            System.out.println("no Write command: " + EmulatorHarness.describe(app.current()));
+            return false;
+        }
+        Thread.sleep(6000);
+
+        Displayable before = app.current();
+        if (!app.press("Write")) { System.out.println("Write did not open"); return false; }
+        app.awaitChange(before, 10000);
+        if (!app.type(text))
+        {
+            System.out.println("compose is not a TextBox: "
+                               + EmulatorHarness.describe(app.current()));
+            return false;
+        }
+        System.out.println("composed: " + text);
+        if (!app.press("Send")) { System.out.println("no Send command"); return false; }
+
+        Thread.sleep(12000);
+        System.out.println("after send: " + EmulatorHarness.describe(app.current()));
+        return true;
+    }
+
+    /**
+     * Exercise server-side visual entities through the real Saved Messages
+     * history and capture the actual 240x320 Canvas before and after reveal.
+     *
+     * This is deliberately desktop-test instrumentation. The product composer
+     * remains plain text; reflection reaches the already-authenticated
+     * Telegram instance only to issue the wire request needed to seed E2E data.
+     */
+    private static boolean formatting(EmulatorHarness app, String outputPath)
+            throws Exception
+    {
+        if (outputPath == null || outputPath.length() == 0)
+        {
+            System.out.println("formatting needs an output directory");
+            return false;
+        }
+        if (!connect(app)) { return false; }
+        if (EmulatorHarness.command(app.current(), "Saved Messages") == null)
+        {
+            System.out.println("no stored session; run the login scenario first");
+            return false;
+        }
+
+        // Let getDialogs and its avatar work leave the foreground connection
+        // before the test-only request uses it.
+        Thread.sleep(6000);
+        Telegram telegram = telegram(app);
+        Peer self = telegram.peers().self();
+        if (self == null || !telegram.peers().isAddressable(self))
+        {
+            System.out.println("self peer is not addressable");
+            return false;
+        }
+
+        String marker = marker();
+        String styleText = marker + " styles"
+                + "\nBold Italic Underline Strike Code Combo";
+        String quoteText = marker + " quote"
+                + "\nQuoted line"
+                + "\npre_value();";
+        String spoilerText = marker + " spoiler"
+                + "\nSpoiler: secret https://example.com";
+        MessageEntity[][] sent = new MessageEntity[][] {
+                styleEntities(styleText), quoteEntities(quoteText),
+                spoilerEntities(spoilerText) };
+        String[] texts = new String[] { styleText, quoteText, spoilerText };
+        UpdateSync sync = updateSync(telegram);
+        for (int i = 0; i < texts.length; i++)
+        {
+            byte[] result = invoke(telegram, formattedSend(self, texts[i],
+                    System.currentTimeMillis() + i, sent[i]));
+            sync.acceptSent(result, self, texts[i]);
+            Thread.sleep(250);
+        }
+        System.out.println("formatted messages accepted by Telegram: marker="
+                + marker + " entities=" + sent[0].length + "/"
+                + sent[1].length + "/" + sent[2].length);
+
+        Displayable list = app.current();
+        if (!app.press("Saved Messages"))
+        {
+            System.out.println("could not open Saved Messages");
+            return false;
+        }
+        app.awaitChange(list, 60000);
+        if (!app.awaitCommand("Older", 60000))
+        {
+            System.out.println("Saved Messages did not become a chat screen");
+            return false;
+        }
+
+        int[] styleTypes = new int[] {
+                MessageEntity.BOLD, MessageEntity.ITALIC,
+                MessageEntity.UNDERLINE, MessageEntity.STRIKE,
+                MessageEntity.CODE };
+        int[] quoteTypes = new int[] {
+                MessageEntity.PRE, MessageEntity.BLOCKQUOTE };
+        int[] spoilerTypes = new int[] {
+                MessageEntity.SPOILER, MessageEntity.URL };
+        Message styled = awaitMessage(app, marker + " styles", styleTypes, 60000);
+        Message quoted = awaitMessage(app, marker + " quote", quoteTypes, 60000);
+        Message received = awaitMessage(app, marker + " spoiler",
+                spoilerTypes, 60000);
+        if (styled == null || quoted == null || received == null)
+        {
+            System.out.println("one or more formatted messages did not arrive");
+            return false;
+        }
+        ChatScreen chat = (ChatScreen) app.current();
+        chat.focusMessage(received.id);
+        Thread.sleep(500);
+
+        if (!hasEntityTypes(styled.entities, styleTypes)
+                || !hasEntityTypes(quoted.entities, quoteTypes)
+                || !hasEntityTypes(received.entities, spoilerTypes))
+        {
+            System.out.println("history lost one or more formatting entities");
+            return false;
+        }
+        if (!chat.hasConcealedSpoilers(received.id)
+                || !app.awaitCommand("Reveal spoiler", 5000))
+        {
+            System.out.println("concealed spoiler did not offer Reveal spoiler");
+            return false;
+        }
+
+        int linesBefore = chat.transcriptLineCount();
+        File output = new File(outputPath);
+        if (!output.isDirectory() && !output.mkdirs())
+        {
+            System.out.println("could not create screenshot directory");
+            return false;
+        }
+        File concealed = new File(output, "formatting-concealed.png");
+        captureCanvas(chat, concealed, 3);
+
+        // Plain-text surfaces must redact the entire spoiler, including the
+        // overlapping URL.
+        Displayable before = app.current();
+        if (!app.press("View full text"))
+        {
+            System.out.println("View full text command missing");
+            return false;
+        }
+        app.awaitChange(before, 5000);
+        javax.microedition.lcdui.TextBox full =
+                (javax.microedition.lcdui.TextBox) app.current();
+        String concealedText = full.getString();
+        if (concealedText.indexOf("secret") >= 0
+                || concealedText.indexOf("example.com") >= 0
+                || concealedText.indexOf('*') < 0)
+        {
+            System.out.println("plain-text spoiler redaction failed");
+            return false;
+        }
+        before = app.current();
+        app.press("Back");
+        app.awaitChange(before, 5000);
+
+        // The actionable URL intersects the spoiler, so the picker must not
+        // expose it until the same message is revealed.
+        before = app.current();
+        if (!app.press("Links")) { return false; }
+        app.awaitChange(before, 5000);
+        javax.microedition.lcdui.List links =
+                (javax.microedition.lcdui.List) app.current();
+        if (links.size() != 1
+                || !"(no supported actions)".equals(links.getString(0)))
+        {
+            System.out.println("concealed URL leaked into the action picker");
+            return false;
+        }
+        before = app.current();
+        app.press("Back");
+        app.awaitChange(before, 5000);
+
+        if (!app.press("Reveal spoiler"))
+        {
+            System.out.println("could not reveal spoiler");
+            return false;
+        }
+        Thread.sleep(300);
+        if (!chat.isSpoilerRevealed(received.id)
+                || chat.transcriptLineCount() != linesBefore)
+        {
+            System.out.println("reveal changed layout or did not persist");
+            return false;
+        }
+        File revealed = new File(output, "formatting-revealed.png");
+        captureCanvas(chat, revealed, 3);
+
+        before = app.current();
+        if (!app.press("View full text")) { return false; }
+        app.awaitChange(before, 5000);
+        full = (javax.microedition.lcdui.TextBox) app.current();
+        if (full.getString().indexOf("secret https://example.com") < 0)
+        {
+            System.out.println("revealed text is still redacted");
+            return false;
+        }
+        before = app.current();
+        app.press("Back");
+        app.awaitChange(before, 5000);
+        before = app.current();
+        if (!app.press("Links")) { return false; }
+        app.awaitChange(before, 5000);
+        links = (javax.microedition.lcdui.List) app.current();
+        if (links.size() != 1 || links.getString(0).indexOf("example.com") < 0)
+        {
+            System.out.println("revealed URL did not reach the action picker");
+            return false;
+        }
+        app.press("Back");
+
+        System.out.println("FORMATTING E2E PASS"
+                + " messageId=" + received.id
+                + " lines=" + linesBefore
+                + " concealed=" + concealed.getAbsolutePath()
+                + " revealed=" + revealed.getAbsolutePath());
+        return true;
+    }
+
+    /** Real forum/topic spoiler round trip, including both preview screens. */
+    private static boolean forumSpoiler(EmulatorHarness app, String forumTitle,
+                                        String topicTitle, String outputPath)
+            throws Exception
+    {
+        if (forumTitle == null || forumTitle.length() == 0
+                || topicTitle == null || topicTitle.length() == 0
+                || outputPath == null || outputPath.length() == 0)
+        {
+            System.out.println("forumspoiler needs forum, topic and output dir");
+            return false;
+        }
+        if (!connect(app)) { return false; }
+        if (EmulatorHarness.command(app.current(), "Saved Messages") == null)
+        {
+            System.out.println("no stored session; run login first");
+            return false;
+        }
+        Thread.sleep(6000);
+
+        Telegram telegram = telegram(app);
+        DialogPage page = telegram.getDialogs(60);
+        Dialog forumRow = findDialog(page.dialogs, forumTitle);
+        if (forumRow == null || forumRow.peer == null || !forumRow.peer.forum)
+        {
+            System.out.println("prepared forum was not found");
+            return false;
+        }
+        Peer forum = forumRow.peer;
+        ForumTopicPage topicPage = telegram.getForumTopics(forum, null, 40);
+        ForumTopic topic = findTopic(topicPage.topics, topicTitle);
+        if (topic == null || topic.id <= ForumTopic.GENERAL_ID)
+        {
+            System.out.println("prepared named topic was not found");
+            return false;
+        }
+
+        String marker = marker();
+        String secret = "secret-topic-value";
+        String text = marker + " spoiler " + secret;
+        MessageEntity spoiler = new MessageEntity();
+        spoiler.type = MessageEntity.SPOILER;
+        spoiler.offset = text.indexOf(secret);
+        spoiler.length = secret.length();
+        MessageEntity[] entities = new MessageEntity[] { spoiler };
+        byte[] result = invoke(telegram, formattedSend(forum, text,
+                System.currentTimeMillis(), entities, topic.id));
+        updateSync(telegram).acceptSent(result, forum, text);
+        System.out.println("forum spoiler accepted by Telegram: marker=" + marker);
+
+        // Re-read both authoritative list endpoints. This catches a parser path
+        // that works in getHistory but leaks in getDialogs/getForumTopics.
+        Thread.sleep(500);
+        Dialog refreshedDialog = findDialog(
+                telegram.getDialogs(60).dialogs, forumTitle);
+        ForumTopic refreshedTopic = findTopic(
+                telegram.getForumTopics(forum, null, 40).topics, topicTitle);
+        if (!concealedPreview(refreshedDialog == null ? null
+                        : refreshedDialog.lastMessage, marker, secret)
+                || !concealedPreview(refreshedTopic == null ? null
+                        : refreshedTopic.lastMessage, marker, secret))
+        {
+            System.out.println("server list preview disclosed the spoiler");
+            return false;
+        }
+
+        Dialog live = awaitDialogPreview(app, forum, marker, 30000);
+        if (live == null || !concealedPreview(live.lastMessage, marker, secret))
+        {
+            System.out.println("live dialog row disclosed the spoiler");
+            return false;
+        }
+
+        File output = new File(outputPath);
+        if (!output.isDirectory() && !output.mkdirs())
+        {
+            System.out.println("could not create screenshot directory");
+            return false;
+        }
+
+        // Narrow the real list to the prepared forum so the screenshot contains
+        // no unrelated chat titles or previews.
+        Displayable before = app.current();
+        if (!app.press("Filter loaded")) { return false; }
+        app.awaitChange(before, 5000);
+        if (!app.type(forumTitle)) { return false; }
+        before = app.current();
+        if (!app.press("Apply")) { return false; }
+        app.awaitChange(before, 5000);
+        DialogListScreen dialogScreen = dialogScreen(app);
+        if (dialogScreen == null || dialogScreen.dialogCount() < 1)
+        {
+            System.out.println("forum filter did not isolate the row");
+            return false;
+        }
+        boolean selectedForum = false;
+        for (int i = 0; i < dialogScreen.dialogCount(); i++)
+        {
+            if (samePeer(dialogScreen.selectedPeer(), forum))
+            {
+                selectedForum = true;
+                break;
+            }
+            app.key(Canvas.KEY_NUM8);
+            Thread.sleep(60);
+        }
+        if (!selectedForum)
+        {
+            System.out.println("forum filter matches did not contain the peer");
+            return false;
+        }
+        captureCanvas(dialogScreen, new File(output,
+                "forum-dialog-list-concealed.png"), 3);
+
+        before = app.current();
+        if (!app.press("Open")) { return false; }
+        app.awaitChange(before, 10000);
+        TopicListScreen topicScreen = awaitTopicScreen(app, 60000);
+        if (topicScreen == null || !selectTopic(app, topicScreen, topicTitle))
+        {
+            System.out.println("topic list did not expose the prepared topic");
+            return false;
+        }
+        ForumTopic uiTopic = topicScreen.selectedTopic();
+        if (uiTopic == null
+                || !concealedPreview(uiTopic.lastMessage, marker, secret))
+        {
+            System.out.println("topic row disclosed the spoiler");
+            return false;
+        }
+        captureCanvas(topicScreen, new File(output,
+                "forum-topic-list-concealed.png"), 3);
+
+        before = app.current();
+        if (!app.press("Open")) { return false; }
+        app.awaitChange(before, 10000);
+        if (!app.awaitCommand("Older", 60000)) { return false; }
+        Message received = awaitMessage(app, marker,
+                new int[] { MessageEntity.SPOILER }, 60000);
+        if (received == null) { return false; }
+        ChatScreen chat = (ChatScreen) app.current();
+        chat.focusMessage(received.id);
+        Thread.sleep(300);
+        if (!chat.hasConcealedSpoilers(received.id)
+                || !app.awaitCommand("Reveal spoiler", 5000))
+        {
+            System.out.println("topic chat did not conceal the spoiler");
+            return false;
+        }
+        int lines = chat.transcriptLineCount();
+        captureCanvas(chat, new File(output, "forum-chat-concealed.png"), 3);
+        if (!app.press("Reveal spoiler")) { return false; }
+        Thread.sleep(300);
+        if (!chat.isSpoilerRevealed(received.id)
+                || chat.transcriptLineCount() != lines)
+        {
+            System.out.println("forum reveal changed layout");
+            return false;
+        }
+        captureCanvas(chat, new File(output, "forum-chat-revealed.png"), 3);
+
+        System.out.println("FORUM SPOILER E2E PASS"
+                + " messageId=" + received.id
+                + " topicId=" + topic.id
+                + " output=" + output.getAbsolutePath());
+        return true;
+    }
+
+    private static Dialog findDialog(Dialog[] dialogs, String title)
+    {
+        if (dialogs == null) { return null; }
+        for (int i = 0; i < dialogs.length; i++)
+        {
+            Dialog dialog = dialogs[i];
+            if (dialog != null && title.equals(dialog.title().trim()))
+            {
+                return dialog;
+            }
+        }
+        return null;
+    }
+
+    private static ForumTopic findTopic(ForumTopic[] topics, String title)
+    {
+        if (topics == null) { return null; }
+        for (int i = 0; i < topics.length; i++)
+        {
+            ForumTopic topic = topics[i];
+            if (topic != null && title.equals(topic.title.trim())) { return topic; }
+        }
+        return null;
+    }
+
+    private static boolean concealedPreview(String preview, String marker,
+                                             String secret)
+    {
+        return preview != null && preview.indexOf(marker) >= 0
+                && preview.indexOf(secret) < 0 && preview.indexOf('*') >= 0;
+    }
+
+    private static Dialog awaitDialogPreview(EmulatorHarness app, Peer peer,
+                                             String marker, int timeoutMs)
+            throws Exception
+    {
+        Field field = tg.app.TgMidlet.class.getDeclaredField("dialogs");
+        field.setAccessible(true);
+        for (int waited = 0; waited < timeoutMs; waited += 250)
+        {
+            Dialog[] rows = (Dialog[]) field.get(app.application());
+            for (int i = 0; rows != null && i < rows.length; i++)
+            {
+                Dialog row = rows[i];
+                if (row != null && samePeer(row.peer, peer)
+                        && row.lastMessage != null
+                        && row.lastMessage.indexOf(marker) >= 0)
+                {
+                    return row;
+                }
+            }
+            Thread.sleep(250);
+        }
+        return null;
+    }
+
+    private static TopicListScreen awaitTopicScreen(EmulatorHarness app,
+                                                     int timeoutMs)
+            throws Exception
+    {
+        for (int waited = 0; waited < timeoutMs; waited += 250)
+        {
+            if (app.current() instanceof TopicListScreen)
+            {
+                TopicListScreen screen = (TopicListScreen) app.current();
+                if (screen.topicCount() > 0) { return screen; }
+            }
+            Thread.sleep(250);
+        }
+        return null;
+    }
+
+    private static boolean selectTopic(EmulatorHarness app,
+                                       TopicListScreen screen, String title)
+            throws Exception
+    {
+        for (int i = 0; i < 100; i++)
+        {
+            ForumTopic selected = screen.selectedTopic();
+            if (selected != null && title.equals(selected.title.trim()))
+            {
+                return true;
+            }
+            app.key(Canvas.KEY_NUM8);
+            Thread.sleep(60);
+        }
+        return false;
+    }
+
+    private static boolean samePeer(Peer one, Peer two)
+    {
+        return one != null && two != null
+                && one.kind == two.kind && one.id == two.id;
+    }
+
+    private static Message awaitMessage(EmulatorHarness app, String marker,
+                                        int[] requiredTypes, int timeoutMs)
+            throws Exception
+    {
+        Message candidate = null;
+        for (int waited = 0; waited < timeoutMs; waited += 250)
+        {
+            Displayable current = app.current();
+            if (current instanceof ChatScreen)
+            {
+                Message[] messages = ((ChatScreen) current).messages();
+                for (int i = 0; i < messages.length; i++)
+                {
+                    Message message = messages[i];
+                    if (message != null && message.text != null
+                            && message.text.indexOf(marker) >= 0)
+                    {
+                        candidate = message;
+                        if (hasEntityTypes(message.entities, requiredTypes))
+                        {
+                            return message;
+                        }
+                    }
+                }
+            }
+            Thread.sleep(250);
+        }
+        if (candidate != null)
+        {
+            StringBuffer types = new StringBuffer();
+            MessageEntity[] entities = candidate.entities;
+            for (int i = 0; entities != null && i < entities.length; i++)
+            {
+                if (i > 0) { types.append(','); }
+                types.append(entities[i].type);
+            }
+            System.out.println("timed out waiting for authoritative entities;"
+                    + " received types=" + types);
+        }
+        return candidate;
+    }
+
+    private static MessageEntity[] styleEntities(String text)
+    {
+        MessageEntity[] entities = new MessageEntity[8];
+        int count = 0;
+        count = add(entities, count, MessageEntity.BOLD, text, "Bold");
+        count = add(entities, count, MessageEntity.ITALIC, text, "Italic");
+        count = add(entities, count, MessageEntity.UNDERLINE, text, "Underline");
+        count = add(entities, count, MessageEntity.STRIKE, text, "Strike");
+        count = add(entities, count, MessageEntity.CODE, text, "Code");
+        count = add(entities, count, MessageEntity.BOLD, text, "Combo");
+        count = add(entities, count, MessageEntity.ITALIC, text, "Combo");
+        count = add(entities, count, MessageEntity.UNDERLINE, text, "Combo");
+        return entities;
+    }
+
+    private static MessageEntity[] quoteEntities(String text)
+    {
+        MessageEntity[] entities = new MessageEntity[2];
+        int count = 0;
+        count = add(entities, count, MessageEntity.BLOCKQUOTE, text,
+                "Quoted line");
+        add(entities, count, MessageEntity.PRE, text, "pre_value();");
+        return entities;
+    }
+
+    private static MessageEntity[] spoilerEntities(String text)
+    {
+        MessageEntity[] entities = new MessageEntity[2];
+        int count = 0;
+        count = add(entities, count, MessageEntity.SPOILER, text,
+                "secret https://example.com");
+        add(entities, count, MessageEntity.URL, text,
+                "https://example.com");
+        return entities;
+    }
+
+    /** Short, unique and deliberately free of digits that look like a phone. */
+    private static String marker()
+    {
+        long value = System.currentTimeMillis() / 1000L;
+        StringBuffer out = new StringBuffer("E2E");
+        for (int i = 0; i < 6; i++)
+        {
+            out.append((char) ('A' + (int) (value % 26L)));
+            value /= 26L;
+        }
+        return out.toString();
+    }
+
+    private static int add(MessageEntity[] entities, int count, int type,
+                           String text, String value)
+    {
+        int offset = text.indexOf(value);
+        if (offset < 0) { throw new IllegalArgumentException(value); }
+        MessageEntity entity = new MessageEntity();
+        entity.type = type;
+        entity.offset = offset;
+        entity.length = value.length();
+        entities[count] = entity;
+        return count + 1;
+    }
+
+    private static byte[] formattedSend(Peer peer, String text, long randomId,
+                                        MessageEntity[] entities)
+    {
+        return formattedSend(peer, text, randomId, entities, 0);
+    }
+
+    private static byte[] formattedSend(Peer peer, String text, long randomId,
+                                        MessageEntity[] entities,
+                                        int threadRootId)
+    {
+        TlWriter writer = new TlWriter(text.length() * 3 + 160);
+        writer.writeInt(Api.MESSAGES_SEND_MESSAGE);
+        boolean inThread = threadRootId > ForumTopic.GENERAL_ID;
+        writer.writeInt((1 << 3) | (inThread ? 1 : 0));
+        Requests.writeInputPeer(writer, peer);
+        if (inThread)
+        {
+            writer.writeInt(Api.INPUT_REPLY_TO_MESSAGE);
+            writer.writeInt(1);              // flags.0: top_msg_id present
+            writer.writeInt(threadRootId);   // reply_to_msg_id
+            writer.writeInt(threadRootId);   // top_msg_id
+        }
+        writer.writeString(text);
+        writer.writeLong(randomId);
+        writer.writeVectorHeader(entities.length);
+        for (int i = 0; i < entities.length; i++)
+        {
+            writeFormattingEntity(writer, entities[i]);
+        }
+        return writer.toByteArray();
+    }
+
+    private static void writeFormattingEntity(TlWriter writer,
+                                              MessageEntity entity)
+    {
+        int constructor;
+        if (entity.type == MessageEntity.BOLD)
+        {
+            constructor = Api.MESSAGE_ENTITY_BOLD;
+        }
+        else if (entity.type == MessageEntity.ITALIC)
+        {
+            constructor = Api.MESSAGE_ENTITY_ITALIC;
+        }
+        else if (entity.type == MessageEntity.UNDERLINE)
+        {
+            constructor = Api.MESSAGE_ENTITY_UNDERLINE;
+        }
+        else if (entity.type == MessageEntity.STRIKE)
+        {
+            constructor = Api.MESSAGE_ENTITY_STRIKE;
+        }
+        else if (entity.type == MessageEntity.CODE)
+        {
+            constructor = Api.MESSAGE_ENTITY_CODE;
+        }
+        else if (entity.type == MessageEntity.SPOILER)
+        {
+            constructor = Api.MESSAGE_ENTITY_SPOILER;
+        }
+        else if (entity.type == MessageEntity.URL)
+        {
+            constructor = Api.MESSAGE_ENTITY_URL;
+        }
+        else if (entity.type == MessageEntity.PRE)
+        {
+            writer.writeInt(Api.MESSAGE_ENTITY_PRE);
+            writer.writeInt(entity.offset);
+            writer.writeInt(entity.length);
+            writer.writeString("");
+            return;
+        }
+        else if (entity.type == MessageEntity.BLOCKQUOTE)
+        {
+            writer.writeInt(Api.MESSAGE_ENTITY_BLOCKQUOTE);
+            writer.writeInt(0);              // flags: expanded, not collapsed
+            writer.writeInt(entity.offset);
+            writer.writeInt(entity.length);
+            return;
+        }
+        else
+        {
+            throw new IllegalArgumentException("entity " + entity.type);
+        }
+        writer.writeInt(constructor);
+        writer.writeInt(entity.offset);
+        writer.writeInt(entity.length);
+    }
+
+    private static boolean hasEntityTypes(MessageEntity[] entities,
+                                          int[] required)
+    {
+        if (entities == null) { return false; }
+        for (int i = 0; i < required.length; i++)
+        {
+            boolean found = false;
+            for (int j = 0; j < entities.length; j++)
+            {
+                if (entities[j] != null && entities[j].type == required[i])
+                {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) { return false; }
+        }
+        return true;
+    }
+
+    private static Telegram telegram(EmulatorHarness app) throws Exception
+    {
+        Field field = tg.app.TgMidlet.class.getDeclaredField("telegram");
+        field.setAccessible(true);
+        return (Telegram) field.get(app.application());
+    }
+
+    private static UpdateSync updateSync(Telegram telegram) throws Exception
+    {
+        Field field = Telegram.class.getDeclaredField("updates");
+        field.setAccessible(true);
+        return (UpdateSync) field.get(telegram);
+    }
+
+    private static byte[] invoke(Telegram telegram, byte[] query)
+            throws Exception
+    {
+        Method method = Telegram.class.getDeclaredMethod("invoke",
+                new Class[] { byte[].class });
+        method.setAccessible(true);
+        try
+        {
+            return (byte[]) method.invoke(telegram, new Object[] { query });
+        }
+        catch (InvocationTargetException wrapped)
+        {
+            Throwable cause = wrapped.getCause();
+            if (cause instanceof Exception) { throw (Exception) cause; }
+            throw wrapped;
+        }
+    }
+
+    private static void captureCanvas(Canvas canvas, File file, int scale)
+            throws Exception
+    {
+        int width = canvas.getWidth();
+        int height = canvas.getHeight();
+        J2SEMutableImage image = new J2SEMutableImage(width, height);
+        Method paint = null;
+        Class type = canvas.getClass();
+        while (type != null && paint == null)
+        {
+            try
+            {
+                paint = type.getDeclaredMethod("paint", new Class[] {
+                        javax.microedition.lcdui.Graphics.class });
+            }
+            catch (NoSuchMethodException missing) { type = type.getSuperclass(); }
+        }
+        if (paint == null) { throw new NoSuchMethodException("Canvas.paint"); }
+        paint.setAccessible(true);
+        paint.invoke(canvas, new Object[] { image.getGraphics() });
+
+        int[] pixels = new int[width * height];
+        image.getRGB(pixels, 0, width, 0, 0, width, height);
+        BufferedImage nativeImage = new BufferedImage(
+                width, height, BufferedImage.TYPE_INT_RGB);
+        nativeImage.setRGB(0, 0, width, height, pixels, 0, width);
+        BufferedImage scaled = new BufferedImage(width * scale, height * scale,
+                BufferedImage.TYPE_INT_RGB);
+        Graphics2D graphics = scaled.createGraphics();
+        try
+        {
+            graphics.setRenderingHint(RenderingHints.KEY_INTERPOLATION,
+                    RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
+            graphics.drawImage(nativeImage, 0, 0,
+                    scaled.getWidth(), scaled.getHeight(), null);
+        }
+        finally { graphics.dispose(); }
+        ImageIO.write(scaled, "png", file);
+    }
+
+    /** Held for the run, so nothing can collect it. */
+    private static byte[] ballast;
+
+    /**
+     * Occupy part of the heap before the client starts.
+     *
+     * This exists because -Xmx cannot express the sizes that matter. On this
+     * JVM every value between 1536k and 3584k resolves to one of those two -
+     * with or without -Xms, with either collector - so the whole interval where
+     * a feature phone lives is unreachable by that lever alone.
+     *
+     * Holding a block instead is both finer and more faithful: a handset with a
+     * 3 MB heap whose AMS is already sitting on a megabyte is exactly this
+     * situation, and it is the client's *free* heap that decides whether an
+     * avatar or a photo fits, not the number in the spec sheet.
+     */
+    private static void holdBallast()
+    {
+        String kb = System.getProperty("tg.driver.ballast");
+        if (kb == null) { return; }
+        try
+        {
+            int bytes = Integer.parseInt(kb.trim()) * 1024;
+            if (bytes <= 0) { return; }
+            ballast = new byte[bytes];
+            // Touch every page: a lazily committed block would not actually
+            // take the memory away from anyone.
+            for (int i = 0; i < bytes; i += 4096) { ballast[i] = 1; }
+            ballast[bytes - 1] = 1;
+            Runtime rt = Runtime.getRuntime();
+            System.out.println("ballast " + (bytes / 1024) + "KB held; free now "
+                    + (rt.freeMemory() / 1024) + "KB of " + (rt.totalMemory() / 1024) + "KB");
+        }
+        catch (Throwable t)
+        {
+            System.out.println("BALLAST FAILED at " + kb + "KB: " + t);
+            ballast = null;
+        }
+    }
+
+    /**
+     * Drop the stored heap measurement so the next start measures again.
+     *
+     * A profile carries the ceiling of whatever JVM first ran it, and that is
+     * correct on a handset - its heap does not change between launches. Under
+     * -Xmx it is a lie in the dangerous direction: the client believes it has
+     * room it does not have. Clearing the keys before startup is what makes a
+     * constrained run measure the heap it is actually given.
+     */
+    private static void forgetMeasurement()
+    {
+        try
+        {
+            RmsAuthKeyStore store = new RmsAuthKeyStore();
+            store.saveString("heap.ceiling", null);
+            store.saveString("heap.block", null);
+            store.saveString("heap.probe.version", null);
+            store.saveString("heap.probe.attempts", null);
+            System.out.println("stored heap measurement cleared; will re-measure");
+        }
+        catch (Throwable t)
+        {
+            System.out.println("could not clear the stored measurement: " + t);
+        }
+    }
+
+    // --------------------------------------------------------------- helpers
+
+    private static String awaitCode(File file, int timeoutMs) throws Exception
+    {
+        for (int waited = 0; waited < timeoutMs; waited += 1000)
+        {
+            if (file.exists() && file.length() > 0)
+            {
+                FileInputStream in = new FileInputStream(file);
+                try
+                {
+                    byte[] buf = new byte[64];
+                    int n = in.read(buf);
+                    if (n > 0)
+                    {
+                        String code = new String(buf, 0, n, "UTF-8").trim();
+                        if (code.length() > 0) { return code; }
+                    }
+                }
+                finally { in.close(); }
+            }
+            Thread.sleep(1000);
+        }
+        return null;
+    }
+
+    private static String arg(String[] args, int index)
+    {
+        return args.length > index ? args[index] : null;
+    }
+
+    private static void dumpMemory()
+    {
+        System.out.println("---- memory ----");
+        String[] budget = MemoryBudget.lines();
+        for (int i = 0; i < budget.length; i++) { System.out.println(budget[i]); }
+        String[] pressure = MemoryPressure.lines();
+        for (int i = 0; i < pressure.length; i++) { System.out.println(pressure[i]); }
+    }
+
+    private static void dumpLog()
+    {
+        // The crash log first: a chat that failed to open records here and then
+        // vanishes from the screen, so the ring alone can look like nothing
+        // happened.
+        String[] crash = CrashLog.load();
+        if (crash != null && crash.length > 0)
+        {
+            System.out.println("---- crash log ----");
+            for (int i = 0; i < crash.length; i++) { System.out.println(crash[i]); }
+        }
+        System.out.println("---- diagnostic log (" + DiagTail.writtenLines()
+                + " lines, " + DiagTail.lostLines() + " lost, ring dropped "
+                + Diag.droppedLines()
+                + (DiagTail.healthy() ? "" : ", TAIL DIED - counts are floors")
+                + ") ----");
+        System.out.flush();
+        DiagTail.dumpTo(System.out);
+    }
+
+    /**
+     * What an avatar actually costs to decode, measured from the ones this
+     * profile has already cached.
+     *
+     * The client's admission check needs a number before the download, and
+     * nothing in the protocol supplies one: {@code AvatarRef} carries a photo id
+     * and a data centre, not a size, and the server picks the dimensions. The
+     * blobs in {@code tgavatars} are those exact bytes, so decoding them here -
+     * on a desktop heap, after the run, where nothing is at stake - answers the
+     * question with observation instead of a guess.
+     *
+     * Prints sizes and dimensions only. Peer ids and account ids stay in the
+     * record store where they belong.
+     */
+    private static void reportAvatarBlobs()
+    {
+        RecordStore rs = null;
+        RecordEnumeration en = null;
+        try
+        {
+            rs = RecordStore.openRecordStore("tgavatars", false);
+            en = rs.enumerateRecords(null, null, false);
+            int count = 0;
+            int minBytes = Integer.MAX_VALUE;
+            int maxBytes = 0;
+            long sumBytes = 0;
+            long maxCost = 0;
+            StringBuffer dims = new StringBuffer();
+            while (en.hasNextElement())
+            {
+                byte[] blob = avatarBytes(rs.getRecord(en.nextRecordId()));
+                if (blob == null) { continue; }
+                count++;
+                sumBytes += blob.length;
+                if (blob.length < minBytes) { minBytes = blob.length; }
+                if (blob.length > maxBytes) { maxBytes = blob.length; }
+                try
+                {
+                    JpegDecoder.Decoded d = JpegDecoder.decodePixels(
+                            new ByteArrayInputStream(blob), null);
+                    long cost = MemoryBudget.photoDecodeCost(d.width, d.height,
+                            blob.length);
+                    if (cost > maxCost) { maxCost = cost; }
+                    if (dims.length() > 0) { dims.append(' '); }
+                    dims.append(d.width).append('x').append(d.height)
+                        .append('/').append(blob.length).append('b');
+                }
+                catch (Throwable t)
+                {
+                    // Says which. At the bottom of the ladder this is usually
+                    // the driver's own heap giving out rather than a bad blob,
+                    // and reading it as "the cache is corrupt" would send the
+                    // next person looking in the wrong place.
+                    if (dims.length() > 0) { dims.append(' '); }
+                    dims.append("unread(").append(Diag.className(t)).append(')');
+                }
+            }
+            if (count == 0) { return; }
+            System.out.println("---- cached avatars ----");
+            System.out.println("avatarBlobs = " + count
+                    + " bytes " + minBytes + ".." + maxBytes
+                    + " mean " + (sumBytes / count)
+                    + " worstDecodeCost " + (maxCost / 1024) + "KB");
+            System.out.println("avatarSizes = " + dims);
+        }
+        catch (Throwable ignored)
+        {
+            // No store, no avatars loaded, no measurement. Not a failure of the
+            // scenario that just ran.
+        }
+        finally
+        {
+            if (en != null) { try { en.destroy(); } catch (Throwable ignored) { } }
+            if (rs != null) { try { rs.closeRecordStore(); } catch (Throwable ignored) { } }
+        }
+    }
+
+    /**
+     * The compressed JPEG out of one tgavatars record.
+     *
+     * Duplicates RmsAvatarCache's private layout on purpose: this is a
+     * measurement tool reading a store it does not own, and giving the device
+     * class a public reader so a driver can weigh its contents would be a worse
+     * trade than eight lines of TL here.
+     */
+    private static byte[] avatarBytes(byte[] raw)
+    {
+        try
+        {
+            TlReader reader = new TlReader(raw);
+            if (reader.readInt() != 0x54474131) { return null; }   // "TGA1"
+            reader.readLong();                                     // accountId
+            reader.readInt();                                      // test
+            reader.readInt();                                      // kind
+            reader.readLong();                                     // peerId
+            reader.readLong();                                     // photoId
+            reader.readLong();                                     // savedAt
+            byte[] bytes = reader.readBytes();
+            return bytes != null && bytes.length > 4 ? bytes : null;
+        }
+        catch (Throwable ignored) { return null; }
+    }
+}

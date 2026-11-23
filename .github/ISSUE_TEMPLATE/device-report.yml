@@ -1,0 +1,140 @@
+name: Device report
+description: Tell us what happened on your handset — even if everything worked
+title: "[device] "
+labels: ["device-report"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you — this is the single most useful thing anyone can contribute.
+        Physical-device evidence exists for five handsets, but Java ME runtimes,
+        firmware and network policies vary widely. Your exact device is still
+        useful evidence.
+
+        **A report where everything worked is just as valuable as one where it
+        did not.**
+
+        `ResyGram Probe` is optional. The separate Probe 1.4.0 JAR is about
+        175 KB and its screens answer many of the questions below, but it is not
+        included in current releases and a report without Probe output is welcome.
+
+        ⚠️ **Never paste your phone number, `api_id`, `api_hash` or an
+        `auth_key` here.** This is a public issue tracker.
+
+  - type: input
+    id: model
+    attributes:
+      label: Handset
+      description: Make and model, and the firmware version if the phone shows one.
+      placeholder: e.g. Nokia C3-00, firmware 07.20
+    validations:
+      required: true
+
+  - type: dropdown
+    id: connection
+    attributes:
+      label: Connection
+      options:
+        - GPRS / EDGE (2G)
+        - 3G
+        - Wi-Fi
+        - Other / not sure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: variant
+    attributes:
+      label: Which build did you install?
+      options:
+        - "Normal (ResyGram-<version>.jar)"
+        - "Minified (ResyGram-<version>-min.jar)"
+        - "Probe only"
+        - "Crypto only"
+        - Both normal and minified
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install-method
+    attributes:
+      label: How did you get it onto the phone?
+      options:
+        - microSD card
+        - USB cable
+        - Bluetooth
+        - Over the air from a local HTTP server
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: outcome
+    attributes:
+      label: What worked and what did not
+      description: |
+        Install, first launch, connecting, sign-in, the chat list, sending a
+        message, viewing a photo. Whatever you got to.
+      placeholder: |
+        Installed from microSD without complaint. Connected on the second try
+        (direct was refused, MTProxy worked). Signed in. Chat list loaded in
+        about 20 seconds. Sending works. Photos open but slowly.
+    validations:
+      required: true
+
+  - type: textarea
+    id: errors
+    attributes:
+      label: Exact error text, if any
+      description: |
+        Verbatim, including anything the phone's own installer said. The
+        Diagnostics and Log screens inside the app are meant to be copied from.
+      render: text
+
+  - type: textarea
+    id: probe
+    attributes:
+      label: Probe output
+      description: |
+        From `ResyGram Probe`: Platform & build, Heap probe, RMS test,
+        Entropy measure, the raw TCP results, and PNG / JPEG decode. Paste
+        whatever you have.
+
+        The entropy figures are worth more than most of the rest: nobody has
+        measured what a handset's clock and allocator actually yield, and the
+        cross-restart section only means anything if you ran it after powering
+        the phone fully off and on a few times.
+      render: text
+      placeholder: |
+        microedition.platform      :
+        microedition.configuration :
+        microedition.profiles      :
+        Runtime.totalMemory        :
+        Public TCP echo            :
+        Telegram DC socket :443    :
+        RMS                        :
+        PNG fixture                :
+        JPEG fixture               :
+        Entropy: clock tick        :
+        Entropy: headline H        :
+        Entropy: bits per gather() :
+        Entropy: hashCode dropped  :
+        Entropy: digest collisions :
+        Entropy: cold boots run    :
+
+  - type: input
+    id: route
+    attributes:
+      label: Which transport route connected?
+      description: Shown on the Diagnostics screen.
+      placeholder: e.g. mtproxy on port 8443, or "none of them"
+
+  - type: textarea
+    id: keys
+    attributes:
+      label: Keys, if you got as far as typing
+      description: |
+        MIDP only standardises the numeric keypad, so soft keys, D-pad and
+        QWERTY codes vary. The Probe's Keys screen reports what the device
+        actually sends.
+      render: text
