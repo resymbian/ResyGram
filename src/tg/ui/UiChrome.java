@@ -6,7 +6,55 @@ import javax.microedition.lcdui.Graphics;
 /** Allocation-free painter for common Canvas chrome. */
 public final class UiChrome
 {
+    /**
+     * Background work, counted by the workers that started it.
+     *
+     * The indicator is deliberately global: every screen shares the same top
+     * bar, and a user does not care which of the three workers is busy. Only
+     * the fact that something is still arriving matters, so the count and the
+     * animation frame live here rather than in each screen.
+     */
+    private static int working;
+    private static volatile int busyFrame;
+
+    private static final int[] BUSY_DX = { 0, 2, 3, 3, 3, 2, 0, -1 };
+    private static final int[] BUSY_DY = { -1, 0, 1, 2, 3, 3, 3, 2 };
+
     private UiChrome() { }
+
+    public static synchronized void setWorking(boolean busy)
+    {
+        working = busy ? 1 : 0;
+    }
+
+    public static synchronized boolean isWorking() { return working > 0; }
+
+    /** Advance the tiny spinner one frame. Called by the client's pulse. */
+    public static void tick() { busyFrame++; }
+
+    /**
+     * A very small eight-dot ring, drawn in the accent bar's own text colour.
+     *
+     * It is intentionally not another progress bar: the bar belongs to a screen
+     * that is waiting for a person, this one only says "the phone is still
+     * doing something" while the screen itself remains usable.
+     */
+    public static void busy(Graphics g, Theme theme, Metrics metrics)
+    {
+        if (!isWorking()) { return; }
+        int size = 9;
+        int x = metrics.width - metrics.padding - size;
+        int y = (metrics.headerHeight - size) / 2;
+        int phase = busyFrame % 8;
+        for (int i = 0; i < 8; i++)
+        {
+            boolean lit = ((i - phase + 8) % 8) < 3;
+            g.setColor(lit ? theme.accentText : theme.accent);
+            int px = x + 4 + BUSY_DX[i];
+            int py = y + 4 + BUSY_DY[i];
+            g.fillRect(px, py, lit ? 2 : 1, lit ? 2 : 1);
+        }
+    }
 
     public static void background(Graphics g, Theme theme, Metrics metrics)
     {
@@ -28,12 +76,14 @@ public final class UiChrome
                     Math.max(1, metrics.width * 2 / 3)),
                     metrics.padding, y, Graphics.TOP | Graphics.LEFT);
         }
+        int rightEdge = metrics.width - metrics.padding;
+        if (isWorking()) { rightEdge -= 13; }
         if (right != null && right.length() > 0)
         {
             g.drawString(clip(right, font, Math.max(1, metrics.width / 3)),
-                    metrics.width - metrics.padding, y,
-                    Graphics.TOP | Graphics.RIGHT);
+                    rightEdge, y, Graphics.TOP | Graphics.RIGHT);
         }
+        busy(g, theme, metrics);
     }
 
     /**

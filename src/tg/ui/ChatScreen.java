@@ -234,14 +234,18 @@ public class ChatScreen extends Canvas
 
     public void setTheme(Theme value)
     {
-        theme = value == null ? Theme.byId(Theme.LIGHT) : value;
+        Theme next = value == null ? Theme.byId(Theme.LIGHT) : value;
+        if (next == theme) { return; }
+        theme = next;
         richText.themeChanged();
         repaint();
     }
 
     public void setTitle(String title)
     {
-        this.title = title == null ? "" : title;
+        String next = title == null ? "" : title;
+        if (next.equals(this.title)) { return; }
+        this.title = next;
         repaint();
     }
 
@@ -262,14 +266,19 @@ public class ChatScreen extends Canvas
     /** Transient one-line status, e.g. "sending..." */
     public void setStatus(String status)
     {
-        this.status = status;
+        String next = status == null ? "" : status;
+        String old = this.status == null ? "" : this.status;
+        if (next.equals(old)) { return; }
+        this.status = next;
         repaint();
     }
 
     /** New live messages retained below a reader who is viewing older text. */
     public void setNewMessageCount(int count)
     {
-        newMessageCount = count > 0 ? count : 0;
+        int next = count > 0 ? count : 0;
+        if (next == newMessageCount) { return; }
+        newMessageCount = next;
         repaint();
     }
 
@@ -961,7 +970,8 @@ public class ChatScreen extends Canvas
         g.setClip(bodyClipX, bodyClipY, bodyClipWidth, bodyClipHeight);
         if (fullscreen)
         {
-            UiChrome.footer(g, theme, metrics, font, "Options",
+            UiChrome.footer(g, theme, metrics, font,
+                    menuOpen ? "Close" : "Options",
                     softRight == null ? "" : softRight.getLabel());
             if (menuOpen) { paintMenu(g); }
         }
@@ -1167,10 +1177,12 @@ public class ChatScreen extends Canvas
         else if (action == Canvas.LEFT || keyCode == Canvas.KEY_NUM4)
         {
             scroll(-visibleLines());
+            focusTopVisible();
         }
         else if (action == Canvas.RIGHT || keyCode == Canvas.KEY_NUM6)
         {
             scroll(visibleLines());
+            focusTopVisible();
         }
         else if (action == Canvas.FIRE || keyCode == Canvas.KEY_NUM5)
         {
@@ -1387,6 +1399,12 @@ public class ChatScreen extends Canvas
     private void focus(int direction)
     {
         if (currentMessages.length == 0) { return; }
+        // A message taller than the screen is what makes "scroll the messages"
+        // and "step between messages" different gestures. While part of it is
+        // off screen, the direction keys scroll inside it; once one screenful is
+        // visible, the same key moves to the neighbouring message. Without this
+        // a long channel post could only be read a whole post at a time.
+        if (scrollInsideFocused(direction)) { return; }
         // Display order is oldest-first and currentMessages is newest-first, so
         // moving down the screen means moving back through the array.
         int step = -direction;
@@ -1412,6 +1430,50 @@ public class ChatScreen extends Canvas
         if (direction > 0 && scroll.top() < maxTop())
         {
             scroll.userScroll(maxTop() - scroll.top(), maxTop());
+            repaint();
+            viewportChanged();
+        }
+    }
+
+    /**
+     * Scroll by a couple of lines when the focused message does not fit.
+     *
+     * @return true when the viewport moved and focus should stay where it is
+     */
+    private boolean scrollInsideFocused(int direction)
+    {
+        int firstLine = lineIndex(focusedMessageId);
+        if (firstLine < 0) { return false; }
+        int lastLine = firstLine;
+        while (lastLine + 1 < lineMessageIds.length
+                && lineMessageIds[lastLine + 1] == focusedMessageId)
+        {
+            lastLine++;
+        }
+        int visible = visibleLines();
+        if (lastLine - firstLine + 1 <= visible) { return false; }
+
+        int top = scroll.top();
+        if (direction < 0 && firstLine < top)
+        {
+            scroll(-2);
+            return true;
+        }
+        if (direction > 0 && lastLine >= top + visible)
+        {
+            scroll(2);
+            return true;
+        }
+        return false;
+    }
+
+    /** Keep a selected row while paging, so an action key always has a target. */
+    private void focusTopVisible()
+    {
+        int id = topVisibleMessageId();
+        if (id != 0 && id != focusedMessageId)
+        {
+            focusedMessageId = id;
             repaint();
             viewportChanged();
         }

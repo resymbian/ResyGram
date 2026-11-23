@@ -61,15 +61,27 @@ public final class Worker
         String name();
     }
 
+    /** Told whenever this worker starts or finishes a task. */
+    public interface BusyListener
+    {
+        void onBusyChanged(boolean busy);
+    }
+
     private final UiDispatcher dispatcher;
 
     private volatile boolean busy;
     private volatile String currentTask;
+    private volatile BusyListener busyListener;
 
     public Worker(UiDispatcher dispatcher)
     {
         if (dispatcher == null) { throw new IllegalArgumentException("dispatcher"); }
         this.dispatcher = dispatcher;
+    }
+
+    public void setBusyListener(BusyListener listener)
+    {
+        busyListener = listener;
     }
 
     public boolean isBusy()
@@ -119,6 +131,7 @@ public final class Worker
         }
         busy = true;
         currentTask = task.name();
+        notifyBusy(true);
 
         new Thread(new Runnable()
         {
@@ -208,5 +221,18 @@ public final class Worker
     {
         busy = false;
         currentTask = null;
+        notifyBusy(false);
+    }
+
+    private void notifyBusy(boolean value)
+    {
+        BusyListener listener = busyListener;
+        if (listener == null) { return; }
+        try { listener.onBusyChanged(value); }
+        catch (Throwable ignored)
+        {
+            // A decorative indicator must never be able to break the worker
+            // that is carrying the actual request.
+        }
     }
 }

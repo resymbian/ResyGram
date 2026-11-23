@@ -22,7 +22,7 @@ import javax.microedition.lcdui.Graphics;
  * Nothing is allocated per paint: the glyph strings are built once, when the
  * screen is constructed.
  */
-public final class EmojiPickerScreen extends Canvas
+public final class EmojiPickerScreen extends SoftKeyCanvas implements CommandListener
 {
     public interface PickListener
     {
@@ -41,6 +41,8 @@ public final class EmojiPickerScreen extends Canvas
     private int top;
     private int columns = 1;
     private int cell;
+    private final Command insertCommand = new Command("Insert", Command.OK, 1);
+    private final Command backCommand = new Command("Back", Command.BACK, 2);
 
     public EmojiPickerScreen(Theme theme, PickListener listener)
     {
@@ -63,17 +65,22 @@ public final class EmojiPickerScreen extends Canvas
                 glyphs[i] = new String(new char[] { high, low });
             }
         }
-        addCommand(new Command("Back", Command.BACK, 1));
-        setCommandListener(new CommandListener()
+        setSoftKeys(insertCommand, new Command[] { backCommand });
+        setCommandListener(this);
+    }
+
+    public void commandAction(Command c, Displayable d)
+    {
+        if (c == insertCommand) { pickSelected(); return; }
+        if (listener != null) { listener.onEmojiPicked(null); }
+    }
+
+    private void pickSelected()
+    {
+        if (selected >= 0 && selected < glyphs.length && listener != null)
         {
-            public void commandAction(Command c, Displayable d)
-            {
-                if (EmojiPickerScreen.this.listener != null)
-                {
-                    EmojiPickerScreen.this.listener.onEmojiPicked(null);
-                }
-            }
-        });
+            listener.onEmojiPicked(glyphs[selected]);
+        }
     }
 
     protected void sizeChanged(int w, int h)
@@ -121,6 +128,7 @@ public final class EmojiPickerScreen extends Canvas
             }
         }
         g.setClip(clipX, clipY, clipWidth, clipHeight);
+        paintSoftKeys(g, theme, metrics, font, font);
     }
 
     /** Keep the selection inside the visible window, one screen at a time. */
@@ -137,6 +145,8 @@ public final class EmojiPickerScreen extends Canvas
         int action = 0;
         try { action = getGameAction(keyCode); }
         catch (Throwable ignored) { }
+
+        if (handleSoftKeys(keyCode, action)) { return; }
 
         if (action == Canvas.UP || keyCode == Canvas.KEY_NUM2)
         {
@@ -156,10 +166,7 @@ public final class EmojiPickerScreen extends Canvas
         }
         else if (action == Canvas.FIRE || keyCode == Canvas.KEY_NUM5)
         {
-            if (selected >= 0 && selected < glyphs.length && listener != null)
-            {
-                listener.onEmojiPicked(glyphs[selected]);
-            }
+            pickSelected();
             return;
         }
         else

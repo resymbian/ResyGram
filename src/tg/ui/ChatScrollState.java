@@ -41,12 +41,12 @@ public final class ChatScrollState
         }
 
         int oldTop = top;
-        if (oldIds != null && oldOffsets != null
-                && oldTop >= 0 && oldTop < oldIds.length
-                && oldTop < oldOffsets.length && oldIds[oldTop] != 0)
+        int anchor = oldIds == null || oldOffsets == null ? -1
+                : firstMessageLine(oldIds, oldOffsets, oldTop);
+        if (anchor >= 0)
         {
-            int id = oldIds[oldTop];
-            int offset = oldOffsets[oldTop];
+            int id = oldIds[anchor];
+            int offset = oldOffsets[anchor];
             int at = find(newIds, newOffsets, id, offset);
             // If the bounded history evicted the anchor, the nearest surviving
             // content is now at the start; do not silently jump further down.
@@ -89,6 +89,29 @@ public final class ChatScrollState
     public void stopFollowingEnd()
     {
         followEnd = false;
+    }
+
+    /**
+     * The first real message line at or below {@code top}.
+     *
+     * The top of the viewport can be a date separator or a media spacer, both
+     * of which carry id 0. Anchoring on those made the reader jump to the
+     * oldest line of the new window; anchoring on the first actual message
+     * beneath them keeps the same message under the reader's eyes.
+     */
+    private static int firstMessageLine(int[] ids, int[] offsets, int top)
+    {
+        int count = Math.min(ids.length, offsets.length);
+        int start = top < 0 ? 0 : top;
+        for (int i = start; i < count; i++)
+        {
+            if (ids[i] != 0) { return i; }
+        }
+        for (int i = start - 1; i >= 0; i--)
+        {
+            if (ids[i] != 0) { return i; }
+        }
+        return -1;
     }
 
     private static int find(int[] ids, int[] offsets, int id, int offset)

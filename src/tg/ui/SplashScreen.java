@@ -53,6 +53,12 @@ public final class SplashScreen extends Canvas
         }
     }
 
+    protected void showNotify()
+    {
+        try { setFullScreenMode(true); }
+        catch (Throwable ignored) { }
+    }
+
     /**
      * Say what is happening now.
      *

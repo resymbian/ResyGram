@@ -5,7 +5,7 @@ import javax.microedition.lcdui.Font;
 import javax.microedition.lcdui.Graphics;
 
 /** Compact reaction picker rendered with the same emoji atlas as chat text. */
-public class ReactionScreen extends Canvas
+public class ReactionScreen extends SoftKeyCanvas
 {
     public interface ActivationListener
     {
@@ -187,11 +187,12 @@ public class ReactionScreen extends Canvas
             y += rowHeight;
         }
         g.setClip(clipX, clipY, clipWidth, clipHeight);
+        paintSoftKeys(g, theme, metrics, font, metaFont);
     }
 
     protected void sizeChanged(int width, int height)
     {
-        metrics.update(width, height, font, metaFont);
+        updateMetrics();
         int visible = metrics.bodyHeight / rowHeight();
         ensureVisible(visible < 1 ? 1 : visible);
     }
@@ -201,6 +202,7 @@ public class ReactionScreen extends Canvas
         int action = 0;
         try { action = getGameAction(keyCode); }
         catch (Throwable ignored) { }
+        if (handleSoftKeys(keyCode, action)) { return; }
         if (action == Canvas.UP || keyCode == Canvas.KEY_NUM2) { move(-1); }
         else if (action == Canvas.DOWN || keyCode == Canvas.KEY_NUM8) { move(1); }
         else if (action == Canvas.FIRE || keyCode == Canvas.KEY_NUM5) { activate(); }
@@ -368,6 +370,7 @@ public class ReactionScreen extends Canvas
 
     private void updateMetrics()
     {
+        softKeyMetrics(metrics, font, metaFont);
         metrics.update(getWidth(), getHeight(), font, metaFont);
     }
 }

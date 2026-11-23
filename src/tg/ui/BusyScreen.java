@@ -18,7 +18,7 @@ import javax.microedition.lcdui.Graphics;
  * often without telling the screen, and an unbounded timer would keep repainting
  * a Canvas nobody is showing for the rest of the session.
  */
-public final class BusyScreen extends Canvas
+public final class BusyScreen extends SoftKeyCanvas
 {
     private static final int FRAME_MS = Spinner.FRAME_MS;
     private static final int MAX_FRAMES = 600;
@@ -63,6 +63,7 @@ public final class BusyScreen extends Canvas
      */
     protected void showNotify()
     {
+        super.showNotify();
         running = true;
         framesLeft = MAX_FRAMES;
         start();
@@ -99,6 +100,7 @@ public final class BusyScreen extends Canvas
 
     protected void paint(Graphics g)
     {
+        softKeyMetrics(metrics, textFont, textFont);
         metrics.update(getWidth(), getHeight(), textFont, textFont);
         UiChrome.background(g, theme, metrics);
 
@@ -124,6 +126,15 @@ public final class BusyScreen extends Canvas
             g.drawString(lines[i], cx, y, Graphics.HCENTER | Graphics.TOP);
             y += lineHeight;
         }
+        paintSoftKeys(g, theme, metrics, textFont, textFont);
+    }
+
+    protected void keyPressed(int keyCode)
+    {
+        int action = 0;
+        try { action = getGameAction(keyCode); }
+        catch (Throwable ignored) { }
+        handleSoftKeys(keyCode, action);
     }
 
     /** Split the message on newlines, then wrap anything wider than the panel. */

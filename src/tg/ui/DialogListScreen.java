@@ -9,7 +9,7 @@ import tg.api.Dialog;
 import tg.api.Peer;
 
 /** Adaptive, themed two-line dialog list with explicit unread badges. */
-public class DialogListScreen extends Canvas
+public class DialogListScreen extends SoftKeyCanvas
 {
     public interface ActivationListener
     {
@@ -62,7 +62,9 @@ public class DialogListScreen extends Canvas
 
     public void setTheme(Theme value)
     {
-        theme = value == null ? Theme.byId(Theme.LIGHT) : value;
+        Theme next = value == null ? Theme.byId(Theme.LIGHT) : value;
+        if (next == theme) { return; }
+        theme = next;
         repaint();
     }
 
@@ -83,7 +85,9 @@ public class DialogListScreen extends Canvas
 
     public void setTitle(String value)
     {
-        title = value == null || value.length() == 0 ? "Chats" : value;
+        String next = value == null || value.length() == 0 ? "Chats" : value;
+        if (next.equals(title)) { return; }
+        title = next;
         repaint();
     }
 
@@ -151,8 +155,15 @@ public class DialogListScreen extends Canvas
 
     public void setStatus(String connection, String updates)
     {
-        this.connection = connection == null ? "" : connection;
-        this.updates = updates == null ? "" : updates;
+        String nextConnection = connection == null ? "" : connection;
+        String nextUpdates = updates == null ? "" : updates;
+        if (nextConnection.equals(this.connection)
+                && nextUpdates.equals(this.updates))
+        {
+            return;
+        }
+        this.connection = nextConnection;
+        this.updates = nextUpdates;
         repaint();
     }
 
@@ -226,7 +237,9 @@ public class DialogListScreen extends Canvas
      */
     public void setWindowLabel(String label)
     {
-        windowLabel = label == null ? "" : label;
+        String next = label == null ? "" : label;
+        if (next.equals(windowLabel)) { return; }
+        windowLabel = next;
         repaint();
     }
 
@@ -257,7 +270,7 @@ public class DialogListScreen extends Canvas
 
     protected void sizeChanged(int width, int height)
     {
-        metrics.update(width, height, font, metaFont);
+        updateMetrics();
         ensureVisible();
         viewportChanged();
     }
@@ -402,6 +415,7 @@ public class DialogListScreen extends Canvas
             y += metrics.rowHeight;
         }
         g.setClip(clipX, clipY, clipWidth, clipHeight);
+        paintSoftKeys(g, theme, metrics, titleFont, metaFont);
     }
 
     protected void keyPressed(int keyCode)
@@ -409,6 +423,7 @@ public class DialogListScreen extends Canvas
         int action = 0;
         try { action = getGameAction(keyCode); }
         catch (Throwable ignored) { }
+        if (handleSoftKeys(keyCode, action)) { return; }
         if (action == UP || keyCode == KEY_NUM2) { move(-1); }
         else if (action == DOWN || keyCode == KEY_NUM8) { move(1); }
         else if (action == LEFT || keyCode == KEY_NUM4)
@@ -575,6 +590,7 @@ public class DialogListScreen extends Canvas
 
     private void updateMetrics()
     {
+        softKeyMetrics(metrics, titleFont, metaFont);
         metrics.update(getWidth(), getHeight(), font, metaFont);
     }
 

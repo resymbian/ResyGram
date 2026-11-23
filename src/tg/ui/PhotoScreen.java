@@ -6,7 +6,7 @@ import javax.microedition.lcdui.Graphics;
 import javax.microedition.lcdui.Image;
 
 /** Bounded adaptive photo viewer with keyboard scrolling and progress text. */
-public class PhotoScreen extends Canvas
+public class PhotoScreen extends SoftKeyCanvas
 {
     private final Font font = Font.getFont(
             Font.FACE_PROPORTIONAL, Font.STYLE_PLAIN, Font.SIZE_SMALL);
@@ -130,7 +130,7 @@ public class PhotoScreen extends Canvas
         {
             g.setFont(font);
             int box = font.getHeight() + metrics.padding * 2;
-            int y = height - box;
+            int y = height - box - metrics.footerHeight;
             g.setColor(theme.surface);
             g.fillRect(0, y, width, box);
             g.setColor(theme.text);
@@ -138,11 +138,12 @@ public class PhotoScreen extends Canvas
                     width - metrics.padding * 2), metrics.padding,
                     y + metrics.padding, Graphics.TOP | Graphics.LEFT);
         }
+        paintSoftKeys(g, theme, metrics, font, font);
     }
 
     protected void sizeChanged(int width, int height)
     {
-        metrics.update(width, height, font, font);
+        updateMetrics();
         if (fitWidthImage != null)
         {
             try
@@ -158,10 +159,11 @@ public class PhotoScreen extends Canvas
 
     protected void keyPressed(int keyCode)
     {
-        if (image == null) { return; }
         int action = 0;
         try { action = getGameAction(keyCode); }
         catch (Throwable ignored) { }
+        if (handleSoftKeys(keyCode, action)) { return; }
+        if (image == null) { return; }
         if (action == FIRE || keyCode == Canvas.KEY_NUM5)
         {
             nextZoom();
@@ -260,6 +262,7 @@ public class PhotoScreen extends Canvas
 
     private void updateMetrics()
     {
+        softKeyMetrics(metrics, font, font);
         metrics.update(getWidth(), getHeight(), font, font);
     }
 }

@@ -8,7 +8,7 @@ import tg.api.ChatParticipant;
 import tg.api.Peer;
 
 /** Adaptive two-line, windowed member list for groups and channels. */
-public class ParticipantListScreen extends Canvas
+public class ParticipantListScreen extends SoftKeyCanvas
 {
     public interface ActivationListener
     {
@@ -71,7 +71,9 @@ public class ParticipantListScreen extends Canvas
 
     public void setStatus(String value)
     {
-        connection = value == null ? "" : value;
+        String next = value == null ? "" : value;
+        if (next.equals(connection)) { return; }
+        connection = next;
         repaint();
     }
 
@@ -130,7 +132,7 @@ public class ParticipantListScreen extends Canvas
 
     protected void sizeChanged(int width, int height)
     {
-        metrics.update(width, height, font, metaFont);
+        updateMetrics();
         ensureVisible();
         viewportChanged();
     }
@@ -198,6 +200,7 @@ public class ParticipantListScreen extends Canvas
             y += metrics.rowHeight;
         }
         g.setClip(clipX, clipY, clipW, clipH);
+        paintSoftKeys(g, theme, metrics, titleFont, metaFont);
     }
 
     protected void keyPressed(int keyCode)
@@ -205,6 +208,7 @@ public class ParticipantListScreen extends Canvas
         int action = 0;
         try { action = getGameAction(keyCode); }
         catch (Throwable ignored) { }
+        if (handleSoftKeys(keyCode, action)) { return; }
         if (action == UP || keyCode == KEY_NUM2) { move(-1); }
         else if (action == DOWN || keyCode == KEY_NUM8) { move(1); }
         else if (action == LEFT || keyCode == KEY_NUM4) { move(-visibleRowsInternal()); }
@@ -329,6 +333,7 @@ public class ParticipantListScreen extends Canvas
 
     private void updateMetrics()
     {
+        softKeyMetrics(metrics, titleFont, metaFont);
         metrics.update(getWidth(), getHeight(), font, metaFont);
     }
 

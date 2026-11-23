@@ -18,7 +18,7 @@ import javax.microedition.lcdui.Canvas;
  * capability report and the crash log, and so key handling is explicit rather
  * than at the mercy of a device-specific Form implementation.
  */
-public class TextScreen extends Canvas
+public class TextScreen extends SoftKeyCanvas
 {
     private final String title;
     private String[] source;         // as supplied
@@ -181,11 +181,12 @@ public class TextScreen extends Canvas
             y += lineHeight;
         }
         g.setClip(clipX, clipY, clipWidth, clipHeight);
+        paintSoftKeys(g, theme, metrics, font, font);
     }
 
     protected void sizeChanged(int width, int height)
     {
-        metrics.update(width, height, font, font);
+        updateMetrics();
         wrappedForWidth = -1;
         if (top > maxTop()) { top = maxTop(); }
     }
@@ -195,6 +196,8 @@ public class TextScreen extends Canvas
         int action = 0;
         try { action = getGameAction(keyCode); }
         catch (Throwable ignored) { /* some handsets throw on unmapped keys */ }
+
+        if (handleSoftKeys(keyCode, action)) { return; }
 
         if (action == Canvas.UP || keyCode == Canvas.KEY_NUM2)
         {
@@ -316,6 +319,7 @@ public class TextScreen extends Canvas
 
     private void updateMetrics()
     {
+        softKeyMetrics(metrics, font, font);
         metrics.update(getWidth(), getHeight(), font, font);
     }
 }

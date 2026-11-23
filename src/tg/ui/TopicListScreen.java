@@ -15,7 +15,7 @@ import tg.api.Peer;
  * row is its title. Selection is anchored on the topic id the way the chat
  * list anchors on a peer, because a live message moves rows under the reader.
  */
-public class TopicListScreen extends Canvas
+public class TopicListScreen extends SoftKeyCanvas
 {
     public interface ActivationListener
     {
@@ -124,8 +124,15 @@ public class TopicListScreen extends Canvas
 
     public void setStatus(String connection, String updates)
     {
-        this.connection = connection == null ? "" : connection;
-        this.updates = updates == null ? "" : updates;
+        String nextConnection = connection == null ? "" : connection;
+        String nextUpdates = updates == null ? "" : updates;
+        if (nextConnection.equals(this.connection)
+                && nextUpdates.equals(this.updates))
+        {
+            return;
+        }
+        this.connection = nextConnection;
+        this.updates = nextUpdates;
         repaint();
     }
 
@@ -178,7 +185,7 @@ public class TopicListScreen extends Canvas
 
     protected void sizeChanged(int width, int height)
     {
-        metrics.update(width, height, font, metaFont);
+        updateMetrics();
         ensureVisible();
         viewportChanged();
     }
@@ -300,6 +307,7 @@ public class TopicListScreen extends Canvas
             y += metrics.rowHeight;
         }
         g.setClip(clipX, clipY, clipWidth, clipHeight);
+        paintSoftKeys(g, theme, metrics, titleFont, metaFont);
     }
 
     protected void keyPressed(int keyCode)
@@ -307,6 +315,7 @@ public class TopicListScreen extends Canvas
         int action = 0;
         try { action = getGameAction(keyCode); }
         catch (Throwable ignored) { }
+        if (handleSoftKeys(keyCode, action)) { return; }
         if (action == UP || keyCode == KEY_NUM2) { move(-1); }
         else if (action == DOWN || keyCode == KEY_NUM8) { move(1); }
         else if (action == LEFT || keyCode == KEY_NUM4)
@@ -464,6 +473,7 @@ public class TopicListScreen extends Canvas
 
     private void updateMetrics()
     {
+        softKeyMetrics(metrics, titleFont, metaFont);
         metrics.update(getWidth(), getHeight(), font, metaFont);
     }
 

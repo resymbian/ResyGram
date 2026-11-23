@@ -8,7 +8,7 @@ import tg.api.Poll;
 import tg.api.PollOption;
 
 /** Bounded radio/checkbox picker for one poll message. */
-public class PollScreen extends Canvas
+public class PollScreen extends SoftKeyCanvas
 {
     public interface SelectionListener
     {
@@ -194,11 +194,12 @@ public class PollScreen extends Canvas
             y += rowHeight;
         }
         g.setClip(clipX, clipY, clipWidth, clipHeight);
+        paintSoftKeys(g, theme, metrics, font, metaFont);
     }
 
     protected void sizeChanged(int width, int height)
     {
-        metrics.update(width, height, font, metaFont);
+        updateMetrics();
         ensureVisible(visibleRows());
     }
 
@@ -207,6 +208,7 @@ public class PollScreen extends Canvas
         int action = 0;
         try { action = getGameAction(keyCode); }
         catch (Throwable ignored) { }
+        if (handleSoftKeys(keyCode, action)) { return; }
         if (action == Canvas.UP || keyCode == Canvas.KEY_NUM2) { move(-1); }
         else if (action == Canvas.DOWN || keyCode == Canvas.KEY_NUM8) { move(1); }
         else if (action == Canvas.FIRE || keyCode == Canvas.KEY_NUM5) { toggle(); }
@@ -392,6 +394,7 @@ public class PollScreen extends Canvas
 
     private void updateMetrics()
     {
+        softKeyMetrics(metrics, font, metaFont);
         metrics.update(getWidth(), getHeight(), font, metaFont);
     }
 

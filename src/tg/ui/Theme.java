@@ -25,14 +25,17 @@ public final class Theme
     public final int photoBackground;
 
     private static final Theme[] PRESETS = new Theme[] {
+        // ResyGram's accent is the blue from the logo: #007DAC. The orange
+        // dot from the same mark is the unread badge, so the two colours on
+        // screen belong to one identity instead of being borrowed from Telegram.
         new Theme(LIGHT, "Light",
-                0xFFFFFF, 0xF5F7FA, 0x000000, 0x606A73,
-                0x003060, 0xFFFFFF, 0xE8F1FA, 0x000000,
-                0x0B4C8C, 0xCBD4DC, 0x1769AA, 0xFFFFFF, 0x101010),
+                0xFFFFFF, 0xF2F7FA, 0x000000, 0x5C6B76,
+                0x007DAC, 0xFFFFFF, 0xE1F1F8, 0x000000,
+                0x00638A, 0xC7D7E0, 0xF39D12, 0xFFFFFF, 0x101010),
         new Theme(DARK, "Dark",
-                0x101418, 0x182026, 0xF2F5F7, 0xAAB4BE,
-                0x2F7DB8, 0xFFFFFF, 0x263D4D, 0xFFFFFF,
-                0x79B8E8, 0x34424D, 0x4EA3E0, 0x071018, 0x080A0C),
+                0x0E1419, 0x15202A, 0xF2F5F7, 0xA7B6C2,
+                0x1E8EC7, 0xFFFFFF, 0x193747, 0xFFFFFF,
+                0x62B6DF, 0x2C414F, 0xF3A325, 0x071018, 0x080A0C),
         new Theme(HIGH_CONTRAST, "High contrast",
                 0x000000, 0x000000, 0xFFFFFF, 0xFFFFFF,
                 0xFFFFFF, 0x000000, 0xFFFF00, 0x000000,

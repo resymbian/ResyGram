@@ -101,11 +101,14 @@ import tg.ui.DialogListScreen;
 import tg.ui.DateTime;
 import tg.ui.EmojiPickerScreen;
 import tg.ui.EmojiText;
+import tg.ui.NoticeScreen;
 import tg.ui.SettingsScreen;
+import tg.ui.SetupScreen;
 import tg.ui.SplashScreen;
 import tg.ui.TextScreen;
 import tg.ui.TouchContextListener;
 import tg.ui.TopicListScreen;
+import tg.ui.UiChrome;
 import tg.ui.PhotoScreen;
 import tg.ui.ParticipantListScreen;
 import tg.ui.FilePickerScreen;
@@ -373,6 +376,10 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
      */
     private Worker worker;
     private Worker avatarWorker;
+    private boolean foregroundBusy;
+    private boolean syncBusy;
+    private boolean avatarBusy;
+    private volatile boolean activityPulseRunning;
 
     /**
      * Background maintenance, so it cannot refuse a user.
@@ -440,9 +447,9 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
      */
     private SplashScreen splash;
 
-    private TextBox phoneBox;
-    private TextBox codeBox;
-    private TextBox passwordBox;
+    private SetupScreen phoneBox;
+    private SetupScreen codeBox;
+    private SetupScreen passwordBox;
     private DialogListScreen dialogList;
     private Dialog[] visibleDialogs = new Dialog[0];
     private TextBox filterBox;
@@ -825,6 +832,56 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
         }
     });
 
+    /**
+     * Cache writes coalesce instead of running once per update.
+     *
+     * An active account produces a batch for every message, read receipt and
+     * reaction. Writing the whole dialog page and the open transcript to RMS on
+     * each one was the largest amount of avoidable work the client did after a
+     * login, and all of it happened on the display thread. A short debounce
+     * turns a burst into one write and still persists the last state.
+     */
+    private boolean dialogCacheDirty;
+    private boolean historyCacheDirty;
+    private final DelayedWake cacheFlushRetry = new DelayedWake(
+            "cache-flush", new DelayedWake.Wake()
+    {
+        public void onWake()
+        {
+            ui.post(new Runnable()
+            {
+                public void run() { flushCaches(); }
+            });
+        }
+    });
+
+    private void markDialogCacheDirty()
+    {
+        dialogCacheDirty = true;
+        cacheFlushRetry.schedule(1200L);
+    }
+
+    private void markHistoryCacheDirty()
+    {
+        historyCacheDirty = true;
+        cacheFlushRetry.schedule(1200L);
+    }
+
+    /** Persist the model once the burst has quietened, on the display thread. */
+    private void flushCaches()
+    {
+        if (dialogCacheDirty)
+        {
+            dialogCacheDirty = false;
+            cacheDialogs(dialogs);
+        }
+        if (historyCacheDirty && openPeer != null)
+        {
+            historyCacheDirty = false;
+            cacheHistory(openPeer, openThreadId(), openHistory);
+        }
+    }
+
     /** A refused maintenance refresh waits for history prefetch to release. */
     private final DelayedWake snapshotRefreshRetry = new DelayedWake(
             "snapshot-refresh", new DelayedWake.Wake()
@@ -993,6 +1050,7 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
         worker = new Worker(ui);
         avatarWorker = new Worker(ui);
         syncWorker = new Worker(ui);
+        installBusyIndicator();
 
         Diag.info("client " + BuildInfo.VERSION + " build " + BuildInfo.BUILD
                   + " env " + BuildInfo.ENV);
@@ -1007,6 +1065,83 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
         new Thread(new Runnable()
         {
             public void run() { bootstrapClient(); }
+        }).start();
+    }
+
+    /**
+     * Light the tiny spinner while any worker is on the wire.
+     *
+     * Three workers exist because housekeeping, avatars and a foreground action
+     * must not block one another. The user does not need that distinction: the
+     * top bar shows one small indicator and the screen underneath stays usable.
+     */
+    private void installBusyIndicator()
+    {
+        worker.setBusyListener(new Worker.BusyListener()
+        {
+            public void onBusyChanged(boolean busy)
+            {
+                foregroundBusy = busy;
+                refreshBackgroundIndicator();
+            }
+        });
+        syncWorker.setBusyListener(new Worker.BusyListener()
+        {
+            public void onBusyChanged(boolean busy)
+            {
+                syncBusy = busy;
+                refreshBackgroundIndicator();
+            }
+        });
+        avatarWorker.setBusyListener(new Worker.BusyListener()
+        {
+            public void onBusyChanged(boolean busy)
+            {
+                avatarBusy = busy;
+                refreshBackgroundIndicator();
+            }
+        });
+    }
+
+    private void refreshBackgroundIndicator()
+    {
+        boolean busy = foregroundBusy || syncBusy || avatarBusy;
+        UiChrome.setWorking(busy);
+        if (busy) { ensureActivityPulse(); }
+        Displayable current = display == null ? null : display.getCurrent();
+        if (current instanceof Canvas) { ((Canvas) current).repaint(); }
+    }
+
+    /**
+     * Repaint at a slow, cheap rate only while work is actually in flight.
+     *
+     * The thread exits by itself when the last worker finishes, and a new one is
+     * started by the next transition. It touches nothing but the current Canvas,
+     * so it cannot outlive the indicator it exists for.
+     */
+    private void ensureActivityPulse()
+    {
+        if (activityPulseRunning || !UiChrome.isWorking()) { return; }
+        activityPulseRunning = true;
+        new Thread(new Runnable()
+        {
+            public void run()
+            {
+                while (UiChrome.isWorking())
+                {
+                    UiChrome.tick();
+                    Displayable current = display == null
+                            ? null : display.getCurrent();
+                    if (current instanceof Canvas)
+                    {
+                        ((Canvas) current).repaint();
+                    }
+                    try { Thread.sleep(200L); }
+                    catch (InterruptedException ignored) { return; }
+                }
+                activityPulseRunning = false;
+                if (UiChrome.isWorking()) { ensureActivityPulse(); }
+            }
         }).start();
     }
 
@@ -1236,6 +1371,8 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
         initialRefreshRetry.cancel();
         snapshotRefreshRetry.cancel();
         reactionActorsRetry.cancel();
+        cacheFlushRetry.cancel();
+        flushCaches();
         stopRemoteLog();
         if (telegram != null)
         {
@@ -1320,7 +1457,7 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
             setOpenHistory(context.messages());
             telegram.setActivePeer(openPeer);
         }
-        display.setCurrent(screen);
+        if (display.getCurrent() != screen) { display.setCurrent(screen); }
     }
 
     public void commandAction(Command c, Displayable d)
@@ -2196,66 +2333,49 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
 
     private void showStartScreen()
     {
-        Form form = new Form("ResyGram");
-        // The very first thing a new user sees. It used to open with a
-        // diagnostic line and never say what to do, which on this handset means
-        // the right soft key - the one a Series 60 user reaches for - looked
-        // like "Exit" while the action sat under Options.
-        form.append("Press Connect to sign in.\n\n");
-        form.append("State: " + connectionLabel + "\n");
-        form.append("Mode: " + ConnectionConfig.name(connectionConfig.mode) + "\n");
-        if (connectionConfig.hasProxy())
-        {
-            form.append("MTProxy: " + connectionConfig.proxyHost + ":"
-                        + connectionConfig.proxyPort + "\n");
-        }
-        else
-        {
-            form.append("MTProxy: not configured\n");
-        }
-        form.append("DC: " + Dc.describe());
+        SetupScreen screen = new SetupScreen(currentTheme(), "ResyGram");
+        String[] lines = new String[8];
+        int count = 0;
+        lines[count++] = "Press Connect to sign in. The right key is always the"
+                + " action that moves you forward in this client.";
+        lines[count++] = "State: " + connectionLabel;
+        lines[count++] = "Mode: "
+                + ConnectionConfig.name(connectionConfig.mode);
+        lines[count++] = connectionConfig.hasProxy()
+                ? ("MTProxy: " + connectionConfig.proxyHost + ":"
+                        + connectionConfig.proxyPort)
+                : "MTProxy: not configured";
+        lines[count++] = "DC: " + Dc.describe();
         String seedingAdvice = AuthKey.seedingAdvice(storedSeeding());
-        if (seedingAdvice != null)
-        {
-            // A recommendation on the screen the user already looks at on every
-            // launch, not a dialog they have to dismiss. It cannot block
-            // anything or repeat itself: it is a line of a form that is built
-            // once, and Diagnostics carries the same status permanently.
-            form.append("\n\n" + seedingAdvice);
-        }
+        if (seedingAdvice != null) { lines[count++] = seedingAdvice; }
         if (heapProbeRunning)
         {
-            form.append("\n\nMeasuring available memory...");
+            lines[count++] = "Measuring available memory...";
         }
         else if (!MemoryBudget.viable())
         {
             // A warning, never a refusal. A handset that under-reports its heap
             // would otherwise be permanently locked out of an app that might
             // have run on it perfectly well.
-            form.append("\n\nThis handset reports only "
+            lines[count++] = "This handset reports only "
                     + (MemoryBudget.ceiling() / 1024) + " KB of usable memory."
                     + " Everything is at its smallest setting and signing in"
-                    + " may not be possible.");
+                    + " may not be possible.";
         }
         if (DevSink.CONFIGURED)
         {
-            // On the first screen, not buried in Settings. A build that can
-            // send diagnostics somewhere should say so before it is used, not
-            // only to whoever goes looking.
-            form.append("\nDiagnostics: can upload to " + DevSink.TCP_HOST
-                    + " on request. Never automatically.");
+            lines[count++] = "Diagnostics: this build can upload reports"
+                    + " to " + DevSink.TCP_HOST + " on request. Never"
+                    + " automatically.";
         }
-        form.addCommand(cmdConnect);
-        form.addCommand(cmdSettings);
-        form.addCommand(cmdDiag);
-        // Reachable before sign-in on purpose: a MIDlet that dies on the way to
-        // the dialog list leaves its evidence here, and the dialog list is
-        // then exactly the screen the tester cannot get to.
-        form.addCommand(cmdCrashLog);
-        form.addCommand(cmdLog);
-        form.addCommand(cmdExit);
-        form.setCommandListener(this);
-        resetRoot(form);
+        String[] shown = new String[count];
+        System.arraycopy(lines, 0, shown, 0, count);
+        screen.setIntro(shown);
+        screen.setSoftKeys(cmdConnect, new Command[] {
+            cmdSettings, cmdDiag, cmdCrashLog, cmdLog, cmdExit
+        });
+        screen.setCommandListener(this);
+        resetRoot(screen);
     }
 
     /**
@@ -2334,11 +2454,15 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
     {
         if (phoneBox == null)
         {
-            phoneBox = new TextBox("Number, then Continue",
-                                   "+", 20, TextField.PHONENUMBER);
-            phoneBox.addCommand(cmdNext);
-            phoneBox.addCommand(cmdLog);
-            phoneBox.addCommand(cmdExit);
+            phoneBox = new SetupScreen(currentTheme(), "Your number");
+            phoneBox.setIntro(new String[] {
+                "Enter your phone number in international format, then press"
+                + " Continue. The country code starts with +."
+            });
+            phoneBox.setField("Phone number", "+", 20, false, false);
+            phoneBox.setSoftKeys(cmdNext, new Command[] {
+                cmdLog, cmdExit
+            });
             phoneBox.setCommandListener(this);
         }
         resetRoot(phoneBox);
@@ -2346,11 +2470,10 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
 
     private void requestCode()
     {
-        phoneNumber = phoneBox.getString().trim();
+        phoneNumber = phoneBox.value().trim();
         if (phoneNumber.length() < 5)
         {
-            showAlert("Enter a phone number in international format, e.g. +1234567890.",
-                      AlertType.WARNING, phoneBox);
+            phoneBox.setError("Enter a number like +1234567890.");
             return;
         }
         showBusy("Sign in", "Requesting a code for " + phoneNumber + "...");
@@ -2394,34 +2517,36 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
     private void showCodeBox()
     {
         int digits = telegram.lastSentCodeLength();
-        String title = "Code via " + telegram.lastSentCodeTypeName()
-                       + (digits > 0 ? (" (" + digits + " digits)") : "")
-                       + ", then Sign in";
+        String delivery = telegram.lastSentCodeTypeName();
+        String title = "Code via " + delivery
+                       + (digits > 0 ? (" (" + digits + " digits)") : "");
         if (codeBox == null)
         {
-            codeBox = new TextBox(title, "", 8, TextField.NUMERIC);
-            codeBox.addCommand(cmdSignIn);
-            codeBox.addCommand(cmdResendCode);
-            codeBox.addCommand(cmdChangeNumber);
-            codeBox.addCommand(cmdLog);
+            codeBox = new SetupScreen(currentTheme(), title);
+            codeBox.setIntro(new String[] {
+                "Enter the code Telegram sent. The right key signs you in;"
+                + " Resend code and Change number are under Options."
+            });
+            codeBox.setField("Code", "", 8, true, false);
+            codeBox.setSoftKeys(cmdSignIn, new Command[] {
+                cmdResendCode, cmdChangeNumber, cmdLog, cmdExit
+            });
             codeBox.setCommandListener(this);
         }
         else
         {
-            codeBox.setString("");
+            codeBox.setValue("");
+            codeBox.setTitle(title);
         }
-        // TextBox titles are settable, so the delivery method can be shown
-        // without a Form wrapper.
-        codeBox.setTitle(title);
         pushScreen(codeBox);
     }
 
     private void signIn()
     {
-        final String code = codeBox.getString().trim();
+        final String code = codeBox.value().trim();
         if (code.length() == 0)
         {
-            showAlert("Enter the code first.", AlertType.WARNING, codeBox);
+            codeBox.setError("Enter the code first.");
             return;
         }
         showBusy("Sign in", "Signing in...");
@@ -2594,23 +2719,26 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
 
     private void showPasswordBox(String hint)
     {
-        String title = "2FA password, then Check";
-        if (hint != null && hint.length() > 0) { title += " (hint: " + hint + ")"; }
-        passwordBox = new TextBox(title, "", 128,
-                                  TextField.ANY | TextField.PASSWORD);
-        passwordBox.addCommand(cmdCheckPassword);
-        passwordBox.addCommand(cmdChangeNumber);
-        passwordBox.addCommand(cmdLog);
+        String title = "Two-step password";
+        passwordBox = new SetupScreen(currentTheme(), title);
+        String[] intro = new String[hint != null && hint.length() > 0 ? 2 : 1];
+        intro[0] = "Enter your cloud password. The right key checks it.";
+        if (intro.length > 1) { intro[1] = "Hint: " + hint; }
+        passwordBox.setIntro(intro);
+        passwordBox.setField("Password", "", 128, false, true);
+        passwordBox.setSoftKeys(cmdCheckPassword, new Command[] {
+            cmdChangeNumber, cmdLog, cmdExit
+        });
         passwordBox.setCommandListener(this);
         pushScreen(passwordBox);
     }
 
     private void checkPassword()
     {
-        final String password = passwordBox.getString();
+        final String password = passwordBox.value();
         if (password.length() == 0)
         {
-            showAlert("Enter the password first.", AlertType.WARNING, passwordBox);
+            passwordBox.setError("Enter the password first.");
             return;
         }
         showBusy("Two-step verification",
@@ -2656,7 +2784,7 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
             // cleared on the way in, so a refusal - which touches nothing else -
             // still cost the user a password they may have spent a minute
             // typing on a numeric keypad.
-            passwordBox.setString("");
+            passwordBox.setValue("");
         }
         else
         {
@@ -3215,6 +3343,15 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
             dialogList.addCommand(cmdBack);
             dialogList.addCommand(cmdExit);
             dialogList.setCommandListener(this);
+            dialogList.setSoftKeys(cmdOpen, new Command[] {
+                cmdBack, cmdRefresh, cmdMoreDialogs, cmdTopOfList,
+                cmdFindChat, cmdChatInfo, cmdJoinByLink, cmdFilter,
+                cmdClearFilter, cmdPin, cmdUnpin, cmdArchive, cmdUnarchive,
+                cmdFolders, cmdSaved, cmdMyProfile, cmdSettings,
+                cmdOutbox, cmdReconnect, cmdDiag, cmdCrashLog,
+                cmdTestNotify, cmdLog, cmdLogOut, cmdLogOutEverywhere,
+                cmdExit
+            });
             dialogList.setTouchContextListener(touchContextListener);
             dialogList.setActivationListener(
                     new DialogListScreen.ActivationListener()
@@ -3262,11 +3399,15 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
                 selectedPeer);
         updateDialogActionCommands(dialogList, dialogList.selectedDialog(), false);
         if (navigation.root() != dialogList) { resetRoot(dialogList); }
-        else if (navigation.current() == dialogList)
+        else if (navigation.current() == dialogList
+                && display.getCurrent() != dialogList)
         {
             // A dialog refresh may finish after the reader has opened a chat,
             // Folders, or a folder list.  Refresh the root model in place, but
-            // do not yank the current ScreenStack entry back to Chats.
+            // do not yank the current ScreenStack entry back to Chats. When the
+            // list is already the current screen there is nothing to restore:
+            // setDialogs above has already repainted it, and calling the whole
+            // navigation path once per update batch was pure overhead.
             restoreScreen(dialogList);
         }
         loadVisibleAvatars();
@@ -4600,6 +4741,11 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
         screen.addCommand(cmdChatInfo);
         screen.addCommand(cmdBack);
         screen.setCommandListener(this);
+        screen.setSoftKeys(cmdOpen, new Command[] {
+            cmdBack, cmdRefresh, cmdMoreDialogs, cmdTopOfList, cmdFindChat,
+            cmdProfile, cmdChatInfo, cmdPin, cmdUnpin, cmdArchive,
+            cmdUnarchive, cmdLog
+        });
         screen.setTouchContextListener(touchContextListener);
         screen.setAvatarCache(avatarCache);
         screen.setActivationListener(new DialogListScreen.ActivationListener()
@@ -6264,6 +6410,10 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
         screen.addCommand(cmdLog);
         screen.addCommand(cmdBack);
         screen.setCommandListener(this);
+        screen.setSoftKeys(cmdBack, new Command[] {
+            cmdOpenTopic, cmdRefresh, cmdMoreTopics, cmdNewTopic,
+            cmdTopicActions, cmdOutbox, cmdLog, cmdExit
+        });
         screen.setTouchContextListener(touchContextListener);
         screen.setActivationListener(new TopicListScreen.ActivationListener()
         {
@@ -7112,11 +7262,18 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
         // Fullscreen, because the native bar plus its padding is nearly a whole
         // text line on this panel. The two keys are then the screen's job: the
         // right one composes, the left one lists what the AMS used to list.
+        //
+        // A broadcast channel is the exception: it usually cannot be written to,
+        // so a right key labelled Write is a dead end. There the right key is
+        // Back, and Write stays available in the menu for the channels whose
+        // permissions do allow posting.
         screen.setFullscreen(true);
-        screen.setSoftKeys(cmdWrite, new Command[]
+        Command primary = peer.kind == Peer.CHANNEL ? cmdBack : cmdWrite;
+        screen.setSoftKeys(primary, new Command[]
         {
-            cmdBack, cmdReply, cmdForward, cmdOpenMedia, cmdSendPhoto,
+            cmdBack, cmdWrite, cmdReply, cmdForward, cmdOpenMedia, cmdSendPhoto,
             cmdSendFile, cmdReactions, cmdViewFullText, cmdEntityActions,
+            cmdEditMessage, cmdOpenComments, cmdRevealSpoiler, cmdPoll,
             cmdDeleteMessage, cmdFindMessages, cmdOlder, cmdJumpLatest,
             cmdFirstUnread, cmdMarkAllRead, cmdChatInfo, cmdProfile,
             cmdRefresh, cmdOutbox, cmdReconnect, cmdLog
@@ -8289,6 +8446,10 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
                 || (batch.dialogListsChanged
                         && (batch.dialogPeers == null
                                 || batch.dialogPeers.length == 0));
+        boolean dialogsDirty = refresh || batch.dialogListsChanged;
+        boolean transcriptChanged = batch.messages.length > 0
+                || batch.edits.length > 0 || batch.reads.length > 0
+                || batch.reactions.length > 0;
         boolean following = chatScreen != null
                 && display.getCurrent() == chatScreen && chatScreen.isAtEnd();
         int incomingForOpen = 0;
@@ -8302,20 +8463,24 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
                 incomingForOpen++;
             }
             if (!mergeMessage(batch.messages[i])) { refresh = true; }
+            else { dialogsDirty = true; }
             mergeTopicRow(batch.messages[i]);
         }
         notifyNewMessages(batch.messages);
         for (int i = 0; i < batch.edits.length; i++)
         {
             applyEditedMessage(batch.edits[i]);
+            dialogsDirty = true;
         }
         for (int i = 0; i < batch.reads.length; i++)
         {
             if (!applyReadState(batch.reads[i])) { refresh = true; }
+            else { dialogsDirty = true; }
         }
         for (int i = 0; i < batch.reactions.length; i++)
         {
             if (!applyReactionUpdate(batch.reactions[i])) { refresh = true; }
+            else { dialogsDirty = true; }
         }
         for (int i = 0; i < batch.polls.length; i++)
         {
@@ -8328,7 +8493,10 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
 
         if (dialogList != null && display.getCurrent() == dialogList)
         {
-            showDialogList(selectedPeer);
+            // A sync-state or typing-only batch must not rebuild rows, refilter
+            // them and re-arm avatar loads under the reader.
+            if (dialogsDirty) { showDialogList(selectedPeer); }
+            else { dialogList.setStatus(connectionLabel, updateLabel); }
         }
         if (dialogIndexDirtyPending)
         {
@@ -8379,7 +8547,10 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
         }
         if (topicScreen != null && display.getCurrent() == topicScreen)
         {
-            showTopicList(selectedTopicId());
+            boolean topicsDirty = batch.forumTopicsChanged
+                    || batch.messages.length > 0 || batch.reads.length > 0;
+            if (topicsDirty) { showTopicList(selectedTopicId()); }
+            else { topicScreen.setStatus(connectionLabel, updateLabel); }
             if (batch.forumTopicsChanged
                     && containsPeer(batch.topicPeers, topicScreen.peer()))
             {
@@ -8390,16 +8561,22 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
         {
             if (following) { unseenLiveMessages = 0; }
             else { unseenLiveMessages += incomingForOpen; }
-            chatScreen.setMessages(openHistory);
+            // Re-wrapping a transcript is the single most expensive thing this
+            // method can do. A read receipt for a message in another chat does
+            // not change a single line of it.
+            if (transcriptChanged)
+            {
+                chatScreen.setMessages(openHistory);
+                scheduleInlineThumbnails(openPeer);
+            }
             chatScreen.setNewMessageCount(unseenLiveMessages);
-            scheduleInlineThumbnails(openPeer);
             appendPendingForOpenPeer();
             chatScreen.setStatus(connectionLabel + "/" + updateLabel);
         }
-        cacheDialogs(dialogs);
-        if (openPeer != null)
+        if (dialogsDirty) { markDialogCacheDirty(); }
+        if (openPeer != null && transcriptChanged)
         {
-            cacheHistory(openPeer, openThreadId(), openHistory);
+            markHistoryCacheDirty();
         }
         if (refresh) { scheduleSnapshotRefresh(); }
     }
@@ -9876,6 +10053,9 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
         participantScreen.addCommand(cmdRefresh);
         participantScreen.addCommand(cmdBack);
         participantScreen.setCommandListener(this);
+        participantScreen.setSoftKeys(cmdBack, new Command[] {
+            cmdParticipantActions, cmdMoreParticipants, cmdRefresh, cmdLog
+        });
         participantScreen.setActivationListener(
                 new ParticipantListScreen.ActivationListener()
         {
@@ -11463,6 +11643,9 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
         pollScreen.addCommand(cmdPollDown);
         pollScreen.addCommand(cmdBack);
         pollScreen.setCommandListener(this);
+        pollScreen.setSoftKeys(cmdVote, new Command[] {
+            cmdBack, cmdSelectPoll, cmdPollUp, cmdPollDown
+        });
         pollScreen.setTouchContextListener(touchContextListener);
         pollScreen.setSelectionListener(new PollScreen.SelectionListener()
         {
@@ -11640,6 +11823,9 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
             reactionScreen.addCommand(cmdReactionDown);
             reactionScreen.addCommand(cmdBack);
             reactionScreen.setCommandListener(this);
+            reactionScreen.setSoftKeys(cmdSelectReaction, new Command[] {
+                cmdBack, cmdReactionUp, cmdReactionDown
+            });
             reactionScreen.setTouchContextListener(touchContextListener);
             reactionScreen.setActivationListener(
                     new ReactionScreen.ActivationListener()
@@ -11706,6 +11892,7 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
                 new String[] { "Loading..." }, currentTheme());
         reactionActorsScreen.setTouchContextListener(touchContextListener);
         reactionActorsScreen.withBack(cmdBack, this);
+        reactionActorsScreen.setSoftKeys(cmdBack, null);
         final TextScreen actorsScreen = reactionActorsScreen;
         reactionActorsPeer = peer;
         reactionActorsMessageId = message.id;
@@ -12422,6 +12609,9 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
             photoScreen.addCommand(cmdRetryPhoto);
             photoScreen.addCommand(cmdZoomPhoto);
             photoScreen.setCommandListener(this);
+            photoScreen.setSoftKeys(cmdZoomPhoto, new Command[] {
+                cmdBack, cmdRetryPhoto
+            });
             photoScreen.setTouchContextListener(touchContextListener);
         }
         photoScreen.setImage(null);
@@ -13012,8 +13202,7 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
     private void showBusy(String title, String text)
     {
         BusyScreen busy = new BusyScreen(currentTheme(), title, text);
-        busy.addCommand(cmdLog);
-        busy.addCommand(cmdExit);
+        busy.setSoftKeys(cmdExit, new Command[] { cmdLog });
         busy.setCommandListener(this);
         display.setCurrent(busy);
     }
@@ -13024,6 +13213,7 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
                 currentTheme());
         screen.setTouchContextListener(touchContextListener);
         screen.addCommand(cmdBack);
+        screen.setSoftKeys(cmdBack, new Command[] { cmdLog });
         screen.setCommandListener(this);
         screen.scrollToEnd();
         pushScreen(screen);
@@ -13038,6 +13228,9 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
         screen.addCommand(cmdReconnect);
         screen.addCommand(cmdTestDrop);
         screen.addCommand(cmdUpload);
+        screen.setSoftKeys(cmdBack, new Command[] {
+            cmdReconnect, cmdTestDrop, cmdUpload
+        });
         screen.setCommandListener(this);
         pushScreen(screen);
     }
@@ -13062,6 +13255,9 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
         screen.addCommand(cmdBack);
         screen.addCommand(cmdUpload);
         screen.addCommand(cmdClearCrash);
+        screen.setSoftKeys(cmdBack, new Command[] {
+            cmdClearCrash, cmdUpload
+        });
         screen.setCommandListener(this);
         pushScreen(screen);
     }
@@ -13166,6 +13362,7 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
                                                  currentTheme());
         screen.setTouchContextListener(touchContextListener);
         screen.addCommand(cmdBack);
+        screen.setSoftKeys(cmdBack, new Command[] { cmdLog });
         screen.setCommandListener(this);
         pushScreen(screen);
 
@@ -13386,6 +13583,7 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
         screen.setTouchContextListener(touchContextListener);
         screen.addCommand(cmdBack);
         screen.addCommand(cmdLog);
+        screen.setSoftKeys(cmdBack, new Command[] { cmdLog });
         screen.setCommandListener(this);
         pushScreen(screen);
     }
@@ -13406,23 +13604,24 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
      */
     private void showRetryableError(String title, Throwable t)
     {
-        Form form = new Form(title);
-        form.append(shortMessage(t));
         Runtime rt = Runtime.getRuntime();
-        form.append(outOfMemory(t)
-                ? "\n\nThis phone ran out of memory rather than out of signal."
-                        + " Closing other applications may help."
-                        + "\n\nheapFree=" + rt.freeMemory()
-                        + " of " + rt.totalMemory()
-                : "\n\nCheck the network connection and try again.");
-        form.addCommand(cmdRefresh);
-        form.addCommand(cmdDiag);
-        form.addCommand(cmdSettings);
-        form.addCommand(cmdLog);
-        form.addCommand(cmdBack);
-        form.addCommand(cmdExit);
-        form.setCommandListener(this);
-        pushScreen(form);
+        String[] lines = new String[] {
+            shortMessage(t),
+            "",
+            outOfMemory(t)
+                    ? "This phone ran out of memory rather than out of signal."
+                            + " Closing other applications may help."
+                            + " heapFree=" + rt.freeMemory()
+                            + " of " + rt.totalMemory()
+                    : "Check the network connection and try again."
+        };
+        TextScreen screen = new TextScreen(title, lines, currentTheme());
+        screen.setTouchContextListener(touchContextListener);
+        screen.setSoftKeys(cmdRefresh, new Command[] {
+            cmdBack, cmdDiag, cmdSettings, cmdLog, cmdExit
+        });
+        screen.setCommandListener(this);
+        pushScreen(screen);
     }
 
     /**
@@ -13443,9 +13642,7 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
 
     private void showAlert(String text, AlertType type, Displayable next)
     {
-        Alert alert = new Alert("", text, null, type);
-        alert.setTimeout(Alert.FOREVER);
-        display.setCurrent(alert, next);
+        showAlertThen("", text, next);
     }
 
     private void showAlertThen(String title, Throwable t, Displayable next)
@@ -13459,9 +13656,14 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
      */
     private void showAlertThen(String title, String message, Displayable next)
     {
-        Alert alert = new Alert(title, message, null, AlertType.ERROR);
-        alert.setTimeout(Alert.FOREVER);
-        display.setCurrent(alert, next);
+        final Displayable back = next == null ? display.getCurrent() : next;
+        NoticeScreen notice = new NoticeScreen(currentTheme(),
+                title == null || title.length() == 0 ? "ResyGram" : title,
+                message, new NoticeScreen.Dismiss()
+        {
+            public void onDismiss() { display.setCurrent(back); }
+        });
+        display.setCurrent(notice);
     }
 
     /**
