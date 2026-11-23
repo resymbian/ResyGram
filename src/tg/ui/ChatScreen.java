@@ -59,12 +59,43 @@ public class ChatScreen extends Canvas
 
     private final Font font;
     private final Font metaFont;
-    private final int lineHeight;
+    private int lineHeight;
+    /** Air above the text inside its line cell, so bubbles do not hug text. */
+    private int textOffsetY;
     private final RichText richText;
     private final Metrics metrics = new Metrics();
     private Theme theme;
     private int lastLayoutWidth = -1;
     private int lastThumbnailHeight = -1;
+
+    /**
+     * Draw each message inside a bubble, Telegram-style.
+     *
+     * The transcript is still a list of wrapped lines; what changes is that the
+     * text is wrapped to a narrower column and each run of lines belonging to one
+     * message gets a rounded rectangle behind it, left for incoming and right for
+     * outgoing. Keeping the line engine is deliberate: it is what makes the
+     * scroll window, the thumbnail rows and the emoji atlas cheap, and a
+     * message-by-message layout would have to rediscover all of it.
+     */
+    private boolean bubbles = true;
+
+    /** Line offset tag for the "who, when" row above a message. */
+    private static final int SENDER_ROW = 3000;
+
+    /** Horizontal room a bubble takes from the transcript column. */
+    private int bubbleInset()
+    {
+        int pad = metrics.padding + 1;
+        return pad < 3 ? 3 : pad;
+    }
+
+    /** Width text is wrapped to: the column minus the bubble walls. */
+    private int wrapWidth()
+    {
+        int width = metrics.contentWidth - bubbleInset() * 2;
+        return width < 8 ? 8 : width;
+    }
 
     private String title = "";
     private String[] lines = new String[0];
@@ -146,7 +177,13 @@ public class ChatScreen extends Canvas
         richText = new RichText();
         font = richText.plainFont();
         metaFont = Font.getFont(Font.FACE_PROPORTIONAL, Font.STYLE_PLAIN, Font.SIZE_SMALL);
-        lineHeight = richText.lineHeight();
+        int base = richText.lineHeight();
+        // A bubble needs air above and below its text, and the line height is the
+        // only place to put it: the text is drawn at the top of its cell, and the
+        // bubble is as tall as its cells, so half the padding on each side is
+        // what keeps glyphs off the rounded corners.
+        textOffsetY = Math.max(1, base / 8);
+        lineHeight = base + textOffsetY * 2;
         this.theme = theme == null ? Theme.byId(Theme.LIGHT) : theme;
         if (thumbnailCapacity < 2) { thumbnailCapacity = 2; }
         this.thumbnailCapacity = thumbnailCapacity;
@@ -413,7 +450,7 @@ public class ChatScreen extends Canvas
         int[] oldMessageIds = lineMessageIds;
         int[] oldMessageOffsets = lineMessageOffsets;
         updateMetrics();
-        int width = metrics.contentWidth;
+        int width = wrapWidth();
         lastLayoutWidth = width;
         lastThumbnailHeight = metrics.thumbnailHeight;
         chooseWindow(messages, width);
@@ -470,7 +507,9 @@ public class ChatScreen extends Canvas
                         outgoing[count] = m.outgoing;
                         meta[count] = true;
                         lineMessageIds[count] = m.id;
-                        lineMessageOffsets[count] = 0;
+                        // Marked so the bubble pass knows this row is the name
+                        // above the message, not the first line of it.
+                        lineMessageOffsets[count] = SENDER_ROW;
                     }
                     count++;
                 }
@@ -721,7 +760,7 @@ public class ChatScreen extends Canvas
         // to be there. Somebody who just sent something wants to see it.
         if (windowFirst > 0) { jumpToNewest(); }
         updateMetrics();
-        int width = metrics.contentWidth;
+        int width = wrapWidth();
 
         int extra = 1 + countWrapped(text, width);
         String[] newLines = new String[lines.length + extra];
@@ -778,7 +817,7 @@ public class ChatScreen extends Canvas
     protected void paint(Graphics g)
     {
         updateMetrics();
-        if (lastLayoutWidth != metrics.contentWidth
+        if (lastLayoutWidth != wrapWidth()
                 || lastThumbnailHeight != metrics.thumbnailHeight)
         {
             layoutMessages(currentMessages, true);
@@ -803,6 +842,10 @@ public class ChatScreen extends Canvas
         int bodyClipWidth = g.getClipWidth();
         int bodyClipHeight = g.getClipHeight();
         g.clipRect(0, metrics.bodyTop, metrics.width, metrics.bodyHeight);
+        if (bubbles)
+        {
+            paintBubbles(g, first, visible);
+        }
         for (int i = 0; i < visible + 2; i++)
         {
             int idx = first + i;
@@ -817,7 +860,7 @@ public class ChatScreen extends Canvas
                 g.setColor(theme.secondaryText);
             }
             if (lineMessageIds[idx] != 0
-                    && lineMessageIds[idx] == focusedMessageId)
+                    && lineMessageIds[idx] == focusedMessageId && !bubbles)
             {
                 g.setColor(theme.selection);
                 g.fillRect(0, y, metrics.width, lineHeight);
@@ -841,8 +884,12 @@ public class ChatScreen extends Canvas
                     int clipWidth = g.getClipWidth();
                     int clipHeight = g.getClipHeight();
                     g.clipRect(0, y, metrics.width, lineHeight);
-                    g.drawImage(thumbnail, metrics.padding,
-                            y - (messageOffset - 1100) * lineHeight,
+                    int thumbX = bubbles
+                            ? bubbleLeft(lineMessageIds[idx], idx) + bubbleInset()
+                            : metrics.padding;
+                    g.drawImage(thumbnail, thumbX,
+                            y - (messageOffset - 1100) * lineHeight
+                                    + textOffsetY,
                             Graphics.TOP | Graphics.LEFT);
                     g.setClip(clipX, clipY, clipWidth, clipHeight);
                 }
@@ -860,18 +907,21 @@ public class ChatScreen extends Canvas
                     boolean focused = id == focusedMessageId;
                     boolean quoted = richText.quotedAt(paintedMessage.entities,
                             lineTextStarts[idx]);
-                    int x = metrics.padding;
+                    int x = bubbles
+                            ? bubbleLeft(id, idx) + bubbleInset()
+                            : metrics.padding;
+                    int textTop = y + textOffsetY;
                     if (quoted)
                     {
                         g.setColor(focused ? theme.selectionText : theme.accent);
-                        g.fillRect(x, y, 2, lineHeight);
+                        g.fillRect(x, textTop, 2, lineHeight - textOffsetY * 2);
                         x += 6;
                     }
                     int textColor = outgoing[idx]
                             ? theme.outgoingText : theme.text;
                     richText.drawLine(g, paintedMessage.text,
                             lineTextStarts[idx],
-                            lineTextStarts[idx] + s.length(), x, y,
+                            lineTextStarts[idx] + s.length(), x, textTop,
                             paintedMessage.entities, isSpoilerRevealed(id),
                             focused, textColor,
                             focused ? theme.selectionText : theme.secondaryText);
@@ -879,12 +929,128 @@ public class ChatScreen extends Canvas
             }
             else if (s != null)
             {
-                EmojiText.drawString(g, s, metrics.padding, y,
+                EmojiText.drawString(g, s, metrics.padding, y + textOffsetY,
                         meta[idx] ? metaFont : font);
             }
             y += lineHeight;
         }
         g.setClip(bodyClipX, bodyClipY, bodyClipWidth, bodyClipHeight);
+    }
+
+    /**
+     * Paint the bubble behind every message group in the visible window.
+     *
+     * Lines of one message are contiguous by construction, so a run of equal,
+     * non-zero ids is a message. The run's own lines give its height and its
+     * widest line gives its width - which is what makes a two-word answer a small
+     * bubble instead of a full-width band.
+     */
+    private void paintBubbles(Graphics g, int first, int visible)
+    {
+        int i = 0;
+        while (i <= visible)
+        {
+            int idx = first + i;
+            if (idx >= lines.length) { break; }
+            int id = lineMessageIds[idx];
+            if (id == 0 || lineMessageOffsets[idx] == SENDER_ROW)
+            {
+                i++;
+                continue;
+            }
+            int end = bubbleEnd(idx, id);
+            // Only a run carrying text or a picture is a bubble. The sender name
+            // above a group is its own line and deliberately stays outside.
+            boolean drawable = false;
+            for (int line = idx; line <= end; line++)
+            {
+                if (lineTextStarts[line] >= 0 || isPictureRow(line))
+                {
+                    drawable = true;
+                    break;
+                }
+            }
+            if (drawable)
+            {
+                int width = bubbleWidth(idx, end);
+                int x = outgoing[idx]
+                        ? metrics.width - metrics.padding - width
+                        : metrics.padding;
+                int top = metrics.bodyTop + touchPaintOffsetY
+                        + (idx - first) * lineHeight;
+                int gap = Math.max(1, textOffsetY / 2);
+                int height = (end - idx + 1) * lineHeight - gap * 2;
+                g.setColor(outgoing[idx] ? theme.selection : theme.surface);
+                g.fillRoundRect(x, top + gap, width, height, 8, 8);
+                if (id == focusedMessageId)
+                {
+                    g.setColor(theme.accent);
+                    g.drawRoundRect(x, top + gap, width, height, 8, 8);
+                }
+            }
+            i = end - first + 1;
+        }
+    }
+
+    /** Last line of the message's bubble: the run minus any trailing name row. */
+    private int bubbleEnd(int idx, int id)
+    {
+        int end = idx;
+        while (end + 1 < lines.length && lineMessageIds[end + 1] == id)
+        {
+            end++;
+        }
+        while (end > idx && lineMessageOffsets[end] == SENDER_ROW) { end--; }
+        return end;
+    }
+
+    /** A row of thumbnail pixels, as opposed to the media label above them. */
+    private boolean isPictureRow(int line)
+    {
+        return lineMessageOffsets[line] >= 1100
+                && lineMessageOffsets[line] < 1200;
+    }
+
+    /**
+     * Left edge of the bubble the line at {@code idx} belongs to.
+     *
+     * Recomputed per line instead of cached: a cache would be another array to
+     * grow, index and keep in step with the layout, and the scan is bounded by
+     * the lines of one message.
+     */
+    private int bubbleLeft(int id, int idx)
+    {
+        int start = idx;
+        while (start > 0 && lineMessageIds[start - 1] == id
+                && lineMessageOffsets[start - 1] != SENDER_ROW)
+        {
+            start--;
+        }
+        int width = bubbleWidth(start, bubbleEnd(idx, id));
+        return outgoing[idx] ? metrics.width - metrics.padding - width
+                             : metrics.padding;
+    }
+
+    private int bubbleWidth(int start, int end)
+    {
+        int inset = bubbleInset() * 2;
+        int widest = 0;
+        for (int line = start; line <= end; line++)
+        {
+            if (isPictureRow(line))
+            {
+                // A picture is as wide as the column inside the bubble.
+                return Math.min(metrics.contentWidth, wrapWidth() + inset);
+            }
+            String text = lines[line];
+            if (lineTextStarts[line] < 0 || text == null) { continue; }
+            int width = EmojiText.substringWidth(text, 0, text.length(), font);
+            if (width > widest) { widest = width; }
+        }
+        int width = widest + inset;
+        int max = wrapWidth() + inset;
+        if (width > max) { width = max; }
+        return width < inset ? inset : width;
     }
 
     private String displayStatus()
@@ -901,7 +1067,7 @@ public class ChatScreen extends Canvas
     protected void sizeChanged(int width, int height)
     {
         metrics.update(width, height, font, metaFont);
-        if (lastLayoutWidth != metrics.contentWidth
+        if (lastLayoutWidth != wrapWidth()
                 || lastThumbnailHeight != metrics.thumbnailHeight)
         {
             layoutMessages(currentMessages, true);
@@ -1525,7 +1691,7 @@ public class ChatScreen extends Canvas
     public int thumbnailWidth()
     {
         updateMetrics();
-        return metrics.contentWidth;
+        return wrapWidth();
     }
 
     public int thumbnailHeight()
