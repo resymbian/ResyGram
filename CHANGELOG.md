@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.2.0
+
+What followed the first build: attachment handling both ways, and system
+notifications through the native bridge.
+
 
 ### Added
 
@@ -11,7 +15,8 @@
   `upload.saveFilePart`/`saveBigFilePart`, then `messages.sendMedia`.
 - Notifications through the native loopback bridge on 127.0.0.1:4711, with a
   Settings switch and a Test notification entry. New arrivals outside the open
-  conversation are folded into one system note.
+  conversation are folded into one system note. The bridge is its own project,
+  [NotiHelper](https://github.com/resymbian/NotiHelper), shared with Discofi.
 - A compile-time JSR-75 stub so the optional package can be used without adding
   it to the artifact, and file read/write permissions in the JAD.
 
