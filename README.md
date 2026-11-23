@@ -50,9 +50,10 @@ would keep open:
 - [x] Upload photos and files from the phone: a folder browser over JSR-75, then
       `upload.saveFilePart` in 32 KiB chunks (`saveBigFilePart` above 10 MB) and
       `messages.sendMedia`, with the byte count on the progress bar
-- [x] Background delivery with a native note, through the loopback bridge
-      (`socket://127.0.0.1:4711`) shared with Discofi; off in Settings, and a
-      Test notification entry proves the bridge is installed
+- [x] Background delivery with a native note and an Inbox entry, through the
+      loopback bridge (`socket://127.0.0.1:4711`) shared with Discofi and
+      maintained as [NotiHelper]; off in Settings, and a Test notification entry
+      proves the bridge is installed
 - [x] A loading bar, not a dot ring: the splash and every blocking step
       (connect, sign-in, sending) sweep a progress bar so the wait reads as a
       process. The busy screen starts on `showNotify` and stops on `hideNotify`,
@@ -94,11 +95,15 @@ build compiles against a stub of the optional `FileConnection` interface. A
 handset without JSR-75 still runs; saving and browsing then say so instead of
 failing silently.
 
-System notes need the companion native bridge, **NotiHelper** (built from the
-Discofi tree with the S60 SDK in Docker, `native/e51/out/NotiHelper.sisx`). It
-listens on loopback only, shows an Avkon global note, writes the same text as an
-unread entry in Messaging's Inbox, and answers one byte. With it absent,
+System notes need the companion native bridge, **[NotiHelper]** - a separate
+project, since this client and Discofi share it. Install
+`NotiHelper.sisx` from its [latest release][NotiHelper] (Open4All and the
+installserver patch required) and launch it once per boot. It listens on
+loopback only, shows an Avkon global note, writes the same text as an unread
+entry in Messaging's Inbox, and answers one byte. With it absent,
 notifications are silently skipped - the client never depends on it.
+
+[NotiHelper]: https://github.com/resymbian/NotiHelper
 
 In **Settings → Mode**, `Auto` reaches Telegram directly: 443 first, then 5222
 when the handset's security policy refuses privileged ports. Leave MTProxy and
