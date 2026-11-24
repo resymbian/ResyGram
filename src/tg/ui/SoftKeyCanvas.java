@@ -66,9 +66,15 @@ public abstract class SoftKeyCanvas extends Canvas
 
     public void setCommandListener(CommandListener listener)
     {
-        super.setCommandListener(listener);
+        // See ChatScreen: in fullscreen, a native listener makes S60 consume the
+        // soft keys before keyPressed can run the drawn Back action.
         dispatch = listener;
     }
+
+    // Soft keys are drawn and dispatched here; nothing is registered with AMS.
+    public void addCommand(Command command) {}
+
+    public void removeCommand(Command command) {}
 
     /** The command listener this screen dispatches to, or null. */
     protected CommandListener listener()

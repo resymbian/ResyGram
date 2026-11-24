@@ -179,8 +179,10 @@ public final class Phase4ContentTest implements Test
                 EmojiText.fallbackFor(0x1f4f7));
         Assert.equal("fire semantic fallback", "[fire]",
                 EmojiText.fallbackFor(0x1f525));
+        Assert.isTrue("melting face has a sprite",
+                EmojiText.hasSprite(0x1fae0));
         Assert.equal("unknown emoji fallback", "[emoji]",
-                EmojiText.fallbackFor(0x1fae0));
+                EmojiText.fallbackFor(0x1fae8));
         String family = "\ud83d\udc69\u200d\ud83d\udcbb";
         Assert.equal("ZWJ is one renderer token", family.length(),
                 EmojiText.nextBoundary(family, 0));

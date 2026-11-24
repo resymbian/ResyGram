@@ -29,6 +29,7 @@ public final class EmojiText
     public static final int GLYPH = 16;
     private static Image sheet;
     private static boolean loadAttempted;
+    private static int loadFailures;
 
     private EmojiText() { }
 
@@ -274,7 +275,14 @@ public final class EmojiText
             case 0x1f680: return "[rocket]";
             case 0x1f44d: return "[+]";
             case 0x1f44e: return "[-]";
-            default: return "[emoji]";
+            default:
+                // Regional indicators are flags, modifiers are skin tones.
+                // Neither has a sprite in a per-codepoint atlas, but showing
+                // "[flag]"/"[tone]" is better than a generic "[emoji]".
+                if (cp >= 0x1f1e6 && cp <= 0x1f1ff) return "[flag]";
+                if (cp >= 0x1f3fb && cp <= 0x1f3ff) return "[tone]";
+                if (cp == 0x1f3f3) return "[flag]";
+                return "[emoji]";
         }
     }
 
@@ -282,30 +290,47 @@ public final class EmojiText
      * Drop the decoded sprite sheet so it can be collected, and allow it to be
      * loaded again on the next paint.
      *
-     * Both fields have to be reset. {@code loadAttempted} latches true so that
-     * a handset with no PNG decoder is not asked twice, which means nulling the
-     * sheet alone would disable emoji permanently rather than temporarily.
+     * All three fields have to be reset. {@code loadAttempted} latches true only
+     * after a successful load, a missing asset or three failed decodes; nulling
+     * the sheet alone would leave emoji disabled for the rest of the session.
      *
-     * Worth 49 472 bytes on the one handset where it has been measured - the
-     * smallest thing on the pressure ladder, and last for that reason.
+     * The sheet is the largest thing on the pressure ladder; on a 32bpp handset
+     * the 256x208 PNG decodes to roughly 210 KB of live heap.
      */
     public static synchronized void release()
     {
         sheet = null;
         loadAttempted = false;
+        loadFailures = 0;
     }
 
     private static synchronized Image sprites()
     {
-        if (loadAttempted) { return sheet; }
-        loadAttempted = true;
+        if (sheet != null) { return sheet; }
+        if (loadAttempted) { return null; }
+
         InputStream in = null;
         try
         {
             in = EmojiText.class.getResourceAsStream("/emoji.png");
-            if (in != null) { sheet = Image.createImage(in); }
+            if (in == null)
+            {
+                // No asset in the JAR: retrying cannot help.
+                loadAttempted = true;
+                return null;
+            }
+            sheet = Image.createImage(in);
+            loadAttempted = sheet != null;
         }
-        catch (Throwable ignored) { sheet = null; }
+        catch (Throwable ignored)
+        {
+            // A transient decode/OOM failure used to latch forever and blank
+            // every emoji for the rest of the session. Retry a few times; only
+            // a dead PNG decoder is treated as permanent.
+            sheet = null;
+            loadFailures++;
+            if (loadFailures >= 3) { loadAttempted = true; }
+        }
         finally
         {
             if (in != null) { try { in.close(); } catch (IOException ignored) { } }

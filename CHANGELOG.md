@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.2.2
+
+Fixes from the Nokia E51:
+
+- The fullscreen chat and topic-list canvases no longer register a native
+  `CommandListener` or native commands. On S60 that made the handset consume the
+  soft keys before `keyPressed` could run the drawn menu, so the right key in a
+  channel opened Options instead of leaving the channel.
+- The emoji atlas grew from 150 to 195 single-codepoint glyphs, adding recent
+  faces, animals, nature and objects seen in real chats. Flags and ZWJ sequences
+  still use text fallbacks (`[flag]`, `[emoji]`): a one-sprite-per-codepoint
+  atlas cannot draw them.
+- A transient PNG decode failure no longer latches emoji off for the whole
+  session; loading is retried up to three times.
+
 ## 0.2.1
 
 Maintenance rebuild of the 0.2.0 code with a higher `MIDlet-Version`, so the

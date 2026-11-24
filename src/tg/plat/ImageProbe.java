@@ -42,8 +42,8 @@ public final class ImageProbe
     /**
      * What the emoji sprite sheet costs to hold.
      *
-     * res/emoji.png is 256x160 and about 16 KB packed, but MIDP decodes it into
-     * a full-colour Image - roughly 160 KB of live heap at 32bpp - and
+     * res/emoji.png is 256x208 and about 21 KB packed, but MIDP decodes it into
+     * a full-colour Image - roughly 210 KB of live heap at 32bpp - and
      * EmojiText caches it in a static field forever. On the messenger build
      * that allocation happens on the FIRST paint of the first chat screen and
      * never on the dialog list, which is exactly the boundary a handset was

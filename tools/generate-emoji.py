@@ -24,6 +24,10 @@ EMOJI = (
     "😼😽🙀😿😾👋🤚🖐✋🖖🤏✌🤞🤟🤘🤙👈👉👆👇☝👎✊👊🤛🤜"
     "🤝👐🤲🤳💅👂👃🧠🫀🫁👣👶👧🧒👦👩🧑👨👵🧓👴🌹🌸🌞⭐"
     "🌈☀☁⚡❄☕🍕🍰🎂🍻🥂⚽🏀🏆🎵🎶📷📱💡🎁🚀✅❌⚠"
+    # Newer single-codepoint glyphs seen in real chats. Sequences, flags and
+    # skin tones still fall back: this atlas is one sprite per code point.
+    "🥹🫠🫢🫣🫡🫶🫰🫵🤌🥲🫄🫃🦄🦊🐼🐸🐧🦁🐯🪄🧿"
+    "🌻🌵🌊🌙💫💥💬💤🧨🔔🔑🗺🧭🏅🥇🎈🎤🎮🧩📝📌💰💳🔒"
 )
 
 
@@ -42,7 +46,7 @@ def main() -> None:
         cp = ord(char)
         if cp not in cps:
             cps.append(cp)
-    cps = cps[:150]
+    cps = cps[:195]
 
     columns = 16
     rows = (len(cps) + columns - 1) // columns

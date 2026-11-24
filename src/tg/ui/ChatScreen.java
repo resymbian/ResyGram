@@ -1977,9 +1977,17 @@ public class ChatScreen extends Canvas
 
     public void setCommandListener(CommandListener listener)
     {
-        super.setCommandListener(listener);
+        // Do not call super: in fullscreen MIDP a registered listener makes the
+        // handset claim the soft keys for its own Options menu, so keyPressed
+        // never sees -6/-7 and the drawn Back key opens Options instead.
         commandDispatch = listener;
     }
+
+    // The drawn menu dispatches commands itself. Registering them with the AMS
+    // as well would put them back into that same Options menu.
+    public void addCommand(Command command) {}
+
+    public void removeCommand(Command command) {}
 
     private void updateMetrics()
     {
