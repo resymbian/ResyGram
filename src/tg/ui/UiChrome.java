@@ -1,5 +1,6 @@
 package tg.ui;
 
+import javax.microedition.lcdui.Canvas;
 import javax.microedition.lcdui.Font;
 import javax.microedition.lcdui.Graphics;
 
@@ -14,20 +15,28 @@ public final class UiChrome
      * the fact that something is still arriving matters, so the count and the
      * animation frame live here rather than in each screen.
      */
-    private static int working;
+    private static volatile int working;
     private static volatile int busyFrame;
+    /**
+     * Height of the last header painted, so the activity pulse can repaint only
+     * the strip that actually contains the spinner. Zero until a screen with a
+     * header has been painted.
+     */
+    private static volatile int headerHeight;
 
     private static final int[] BUSY_DX = { 0, 2, 3, 3, 3, 2, 0, -1 };
     private static final int[] BUSY_DY = { -1, 0, 1, 2, 3, 3, 3, 2 };
 
     private UiChrome() { }
 
-    public static synchronized void setWorking(boolean busy)
+    public static void setWorking(boolean busy)
     {
+        // No lock: header() asks this on every paint of every screen, and a
+        // synchronized read in the display thread is pure overhead there.
         working = busy ? 1 : 0;
     }
 
-    public static synchronized boolean isWorking() { return working > 0; }
+    public static boolean isWorking() { return working > 0; }
 
     /** Advance the tiny spinner one frame. Called by the client's pulse. */
     public static void tick() { busyFrame++; }
@@ -56,6 +65,28 @@ public final class UiChrome
         }
     }
 
+    /**
+     * Repaint just the area the spinner lives in.
+     *
+     * The pulse used to call {@code canvas.repaint()} five times a second, which
+     * on the chat list meant re-measuring every row, wrapping every visible
+     * message and clipping every string just to move eight dots in the header.
+     * The header records its own height when it paints; until then a full
+     * repaint is the only safe answer.
+     */
+    public static void repaintIndicator(Canvas canvas)
+    {
+        if (canvas == null) { return; }
+        int height = headerHeight;
+        int canvasHeight = canvas.getHeight();
+        if (height <= 0 || height + 8 >= canvasHeight)
+        {
+            canvas.repaint();
+            return;
+        }
+        canvas.repaint(0, 0, canvas.getWidth(), height + 8);
+    }
+
     public static void background(Graphics g, Theme theme, Metrics metrics)
     {
         g.setColor(theme.background);
@@ -65,6 +96,7 @@ public final class UiChrome
     public static void header(Graphics g, Theme theme, Metrics metrics,
                               Font font, String left, String right)
     {
+        headerHeight = metrics.headerHeight;
         g.setColor(theme.accent);
         g.fillRect(0, 0, metrics.width, metrics.headerHeight);
         g.setColor(theme.accentText);
@@ -125,12 +157,23 @@ public final class UiChrome
         String suffix = "...";
         int suffixWidth = font.stringWidth(suffix);
         if (suffixWidth > width) { return ""; }
-        int end = value.length();
-        while (end > 0
-                && font.substringWidth(value, 0, end) + suffixWidth > width)
+        // substringWidth(0, n) grows monotonically with n, so halve the search
+        // instead of measuring every prefix. A 96-character preview used to cost
+        // up to 96 measurements per paint, per row; this costs about seven.
+        int low = 0;
+        int high = value.length();
+        while (low < high)
         {
-            end--;
+            int mid = low + ((high - low + 1) >> 1);
+            if (font.substringWidth(value, 0, mid) + suffixWidth <= width)
+            {
+                low = mid;
+            }
+            else
+            {
+                high = mid - 1;
+            }
         }
-        return value.substring(0, end) + suffix;
+        return value.substring(0, low) + suffix;
     }
 }

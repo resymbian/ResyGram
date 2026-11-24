@@ -32,8 +32,10 @@ import tg.app.ScreenStack;
 import tg.mem.MemoryBudget;
 import tg.ui.ChatScreen;
 import tg.ui.AvatarCache;
+import tg.ui.DateTime;
 import tg.ui.DialogListScreen;
 import tg.ui.Metrics;
+import tg.ui.UiChrome;
 import tg.ui.PhotoScreen;
 import tg.ui.ReactionScreen;
 import tg.ui.TextScreen;
@@ -47,6 +49,7 @@ public final class Phase7DesignTest implements Test
     public void run() throws Exception
     {
         themesAndPersistence();
+        clippingAndDates();
         metricsAndRendering();
         dialogListBehaviour();
         avatarCache();
@@ -76,10 +79,55 @@ public final class Phase7DesignTest implements Test
         AppSettings loaded = new AppSettings();
         loaded.load(store);
         Assert.equal("theme RMS round trip", Theme.DARK, loaded.themeId);
+
+        // The switch sits next to the NotiHelper test command: if it does not
+        // survive a restart, the test command is checking a bridge the reader
+        // believes they switched off.
+        first.notifications = false;
+        first.save(store);
+        loaded.load(store);
+        Assert.isFalse("notifications RMS round trip", loaded.notifications);
+        first.notifications = true;
+        first.save(store);
+        loaded.load(store);
+        Assert.isTrue("notifications default round trip", loaded.notifications);
+
         store.saveString("ui.theme", "999");
         loaded.load(store);
         Assert.equal("invalid RMS theme fallback", Theme.LIGHT,
                 loaded.themeId);
+    }
+
+    /**
+     * The clipping search has to stay exact: a binary search that stops one
+     * character early hides the end of a chat title, and one that stops late
+     * draws past the header. Date caching must not change what is formatted.
+     */
+    private static void clippingAndDates()
+    {
+        Font font = Font.getFont(Font.FACE_PROPORTIONAL, Font.STYLE_PLAIN,
+                Font.SIZE_SMALL);
+        String text = "A long conversation title that will not fit";
+        int width = font.stringWidth("A long conv");
+        String clipped = UiChrome.clip(text, font, width);
+        Assert.isTrue("clipped text ends with an ellipsis",
+                clipped.endsWith("..."));
+        Assert.isTrue("clipped text fits the box",
+                font.stringWidth(clipped) <= width);
+        Assert.isTrue("clipped text keeps a useful prefix",
+                clipped.startsWith("A long"));
+        Assert.equal("short text is untouched",
+                "short", UiChrome.clip("short", font, width));
+
+        int now = (int) (System.currentTimeMillis() / 1000L);
+        Assert.equal("day key is stable", DateTime.dayKey(now),
+                DateTime.dayKey(now));
+        Assert.equal("compact time is stable", DateTime.compact(now),
+                DateTime.compact(now));
+        Assert.equal("today reads as a time", DateTime.time(now),
+                DateTime.compact(now));
+        Assert.equal("an old date reads as a date", DateTime.date(1),
+                DateTime.compact(1));
     }
 
     private static void metricsAndRendering() throws Exception

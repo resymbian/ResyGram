@@ -1125,7 +1125,7 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
         Displayable current = display == null ? null : display.getCurrent();
         if (current instanceof Canvas && ((Canvas) current).isShown())
         {
-            ((Canvas) current).repaint();
+            UiChrome.repaintIndicator((Canvas) current);
         }
     }
 
@@ -2118,7 +2118,7 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
         }
         else if (c == cmdTestNotify)
         {
-            testNotification();
+            testNotification(d);
         }
         else if (c == cmdSettings)
         {
@@ -3847,6 +3847,17 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
         }
     }
 
+    /**
+     * Avatars fetched in one worker round trip.
+     *
+     * A visible list used to mean one Thread, one RMS walk, one media DC
+     * download and one display callback per row - and each callback chained the
+     * next row only after the repaint had been serviced. Four at a time keeps
+     * the same serial connection and memory gate while removing three of those
+     * round trips out of four.
+     */
+    private static final int AVATAR_BATCH = 4;
+
     /** Load only avatars that can currently become visible. */
     private void loadVisibleAvatars()
     {
@@ -3893,9 +3904,15 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
             Diag.info("avatars resumed");
         }
         Peer[] candidates = avatarScreen.visiblePeers();
-        for (int i = 0; i < candidates.length; i++)
+        int limit = Math.min(candidates.length, AVATAR_BATCH);
+        final Peer[] peers = new Peer[limit];
+        final long[] photoIds = new long[limit];
+        // avatarSize() recalculates metrics: once per batch, not per row.
+        final int target = Math.max(8, avatarScreen.avatarSize());
+        int count = 0;
+        for (int i = 0; i < candidates.length && count < limit; i++)
         {
-            final Peer peer = candidates[i];
+            Peer peer = candidates[i];
             if (peer == null || peer.avatar == null) { continue; }
             if (peer.kind != Peer.CHAT && peer.accessHash == 0)
             {
@@ -3903,151 +3920,195 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
                 continue;
             }
             if (!avatarCache.markLoading(peer)) { continue; }
-            // What this used to bump its own counter for. avatarGeneration
-            // moved on exactly one event - a logout - which is what the session
-            // generation is, so the two are now one.
-            final AsyncScope.Token asked = scope.capture(peer, 0);
-            final long photoId = peer.avatar.photoId;
-            final int target = Math.max(8, avatarScreen.avatarSize());
-            boolean submitted = avatarWorker.submit(new Worker.Task()
+            peers[count] = peer;
+            photoIds[count] = peer.avatar.photoId;
+            count++;
+        }
+        if (count == 0) { return; }
+        final int size = count;
+        // Account-level: the batch can contain any visible peer, so a logout is
+        // the only transition that can invalidate all of it at once.
+        final AsyncScope.Token asked = scope.capture();
+        boolean submitted = avatarWorker.submit(new Worker.Task()
+        {
+            public String name() { return "dialog avatar"; }
+
+            public Object run() throws Exception
             {
-                public String name() { return "dialog avatar"; }
-
-                public Object run() throws Exception
+                AvatarBatch out = new AvatarBatch(size);
+                for (int i = 0; i < size; i++)
                 {
-                    long accountId = cacheAccountId();
-                    byte[] bytes = accountId == 0 ? null
-                            : avatarDiskCache.load(accountId, Dc.isTest(), peer);
-                    boolean downloaded = false;
-                    if (bytes == null)
+                    Peer peer = peers[i];
+                    try
                     {
-                        PhotoInputStream in = null;
-                        try
+                        long accountId = cacheAccountId();
+                        byte[] bytes = accountId == 0 ? null
+                                : avatarDiskCache.load(accountId, Dc.isTest(), peer);
+                        boolean downloaded = false;
+                        if (bytes == null)
                         {
-                            in = telegram.openAvatar(peer, new DownloadToken());
-                            bytes = JpegDecoder.read(in, null);
-                            downloaded = true;
+                            PhotoInputStream in = null;
+                            try
+                            {
+                                in = telegram.openAvatar(peer, new DownloadToken());
+                                bytes = JpegDecoder.read(in, null);
+                                downloaded = true;
+                            }
+                            finally
+                            {
+                                if (in != null)
+                                {
+                                    try { in.close(); }
+                                    catch (Throwable ignored) { }
+                                }
+                            }
                         }
-                        finally
+                        // The exact question, now that the image is here: its own
+                        // header says how many pixels it is about to become.
+                        // Bounded at level 1 - an avatar must not clear the avatar
+                        // cache to make room for an avatar. See MemoryPressure.
+                        int dims = JpegDecoder.dimensions(bytes);
+                        long cost = MemoryBudget.photoDecodeCost(dims >>> 16,
+                                dims & 0xffff, bytes.length);
+                        if (!MemoryPressure.reserve(cost, 1))
                         {
-                            if (in != null) { try { in.close(); } catch (Throwable ignored) { } }
+                            throw new NoRoom("avatar needs " + (cost / 1024)
+                                    + "k, headroom "
+                                    + (MemoryPressure.headroom() / 1024) + "k");
+                        }
+                        // Remembered so that, if the decode throws anyway, the
+                        // failure can tell the list how much room turned out not
+                        // to be enough. One avatar worker at a time, so no race.
+                        avatarAdmittedAt = MemoryPressure.headroom();
+                        Image decoded = JpegDecoder.decode(bytes, null);
+                        out.images[i] = ImageScaler.fitBox(decoded, target,
+                                target);
+                        // Re-asked, not reused: the id was read before the download,
+                        // and a logout can have happened during it. This worker is
+                        // a separate Worker from the one running auth.logOut, so
+                        // the two genuinely overlap.
+                        if (downloaded && accountId != 0 && accountActive)
+                        {
+                            avatarDiskCache.save(accountId, Dc.isTest(), peer, bytes);
                         }
                     }
-                    // The exact question, now that the image is here: its own
-                    // header says how many pixels it is about to become.
-                    // Bounded at level 1 - an avatar must not clear the avatar
-                    // cache to make room for an avatar. See MemoryPressure.
-                    int size = JpegDecoder.dimensions(bytes);
-                    long cost = MemoryBudget.photoDecodeCost(size >>> 16,
-                            size & 0xffff, bytes.length);
-                    if (!MemoryPressure.reserve(cost, 1))
+                    catch (Throwable t)
                     {
-                        throw new NoRoom("avatar needs " + (cost / 1024)
-                                + "k, headroom "
-                                + (MemoryPressure.headroom() / 1024) + "k");
+                        out.errors[i] = t;
+                        // A socket refusal is a property of the handset, not of
+                        // this peer: stop the batch and retire avatars for the
+                        // session rather than breaking the connection in use.
+                        if (isSocketUnavailable(t))
+                        {
+                            avatarsUnavailable = true;
+                        }
+                        // An OutOfMemoryError out of the decode is a better
+                        // measurement than the estimate that let it through, so
+                        // it becomes the floor. headroom() said there was room
+                        // for this decode and there was not, so it overstated by
+                        // at least the size of the decode.
+                        if (t instanceof OutOfMemoryError)
+                        {
+                            long floor = avatarAdmittedAt
+                                    + MemoryBudget.avatarDecodeCost();
+                            if (floor > avatarHeapFloor) { avatarHeapFloor = floor; }
+                        }
+                        // A memory refusal will be true for every other peer in
+                        // the batch too. Walking them one at a time is the storm
+                        // this whole path exists to end; the next scroll asks
+                        // again, after the collect this already ran.
+                        if (avatarsUnavailable || t instanceof NoRoom
+                                || t instanceof OutOfMemoryError)
+                        {
+                            out.stopped = true;
+                            break;
+                        }
                     }
-                    // Remembered so that, if the decode throws anyway, the
-                    // failure can tell the list how much room turned out not to
-                    // be enough. One avatar worker at a time, so no race.
-                    avatarAdmittedAt = MemoryPressure.headroom();
-                    Image decoded = JpegDecoder.decode(bytes, null);
-                    Image scaled = ImageScaler.fitBox(decoded, target, target);
-                    // Re-asked, not reused: the id was read before the download,
-                    // and a logout can have happened during it. This worker is
-                    // a separate Worker from the one running auth.logOut, so
-                    // the two genuinely overlap.
-                    if (downloaded && accountId != 0 && accountActive)
-                    {
-                        avatarDiskCache.save(accountId, Dc.isTest(), peer, bytes);
-                    }
-                    return new AvatarLoad(peer, photoId, scaled);
                 }
-            }, new Worker.Callback()
+                return out;
+            }
+        }, new Worker.Callback()
+        {
+            public void onSuccess(Object result)
             {
-                public void onSuccess(final Object result)
+                AvatarBatch loaded = (AvatarBatch) result;
+                if (!asked.sameSession())
                 {
-                    AvatarLoad loaded = (AvatarLoad) result;
-                    if (asked.sameSession()
-                            && loaded.peer.avatar != null
-                            && loaded.peer.avatar.photoId == loaded.photoId)
-                    {
-                        avatarCache.put(loaded.peer, loaded.image);
-                        if (avatarScreen != null)
-                        {
-                            avatarScreen.avatarsChanged();
-                        }
-                        loadVisibleAvatars();
-                    }
-                    else
-                    {
-                        try { avatarDiskCache.clear(); }
-                        catch (Throwable ignored) { }
-                    }
+                    try { avatarDiskCache.clear(); }
+                    catch (Throwable ignored) { }
+                    return;
                 }
-
-                public void onFailure(final Throwable error)
+                boolean retry = true;
+                for (int i = 0; i < size; i++)
                 {
-                    // An avatar needs a SECOND connection to the media DC, and
-                    // some handsets cannot hold two sockets at once: the open
-                    // fails, and on the GT-C3592 the attempt also desynchronises
-                    // the connection already in use, so the messages.getHistory
-                    // running alongside it dies with "invalid FakeTLS
-                    // application record" and the chat renders empty.
-                    //
-                    // One decorative thumbnail is not worth breaking the client
-                    // for, so a socket failure retires avatar loading for the
-                    // rest of the session rather than repeating it per peer.
-                    if (isSocketUnavailable(error)) { avatarsUnavailable = true; }
-
-                    // An OutOfMemoryError out of the decode is a better
-                    // measurement than the estimate that let it through, so it
-                    // becomes the floor. Without this the list simply moves to
-                    // the next row and fails there too, which is the storm this
-                    // whole change exists to end.
-                    if (error instanceof OutOfMemoryError)
-                    {
-                        // Not the headroom at the failure - the headroom at the
-                        // failure plus what the work needed. headroom() said
-                        // there was room for this decode and there was not, so
-                        // it was overstating by at least the size of the decode;
-                        // asking only for "more than last time" lets the first
-                        // collect clear the bar and the next row fail the same
-                        // way. Measured: at 1410 KB of ballast that flapped
-                        // between paused and resumed nine times in fifteen
-                        // seconds, which is nine wasted decodes.
-                        long floor = avatarAdmittedAt
-                                + MemoryBudget.avatarDecodeCost();
-                        if (floor > avatarHeapFloor) { avatarHeapFloor = floor; }
-                    }
-                    final boolean noRoom = error instanceof NoRoom
-                            || error instanceof OutOfMemoryError;
-
-                    if (asked.sameSession())
+                    Peer peer = peers[i];
+                    Throwable error = loaded.errors[i];
+                    if (error != null)
                     {
                         avatarCache.fail(peer);
-                        if (avatarScreen != null)
-                        {
-                            avatarScreen.avatarsChanged();
-                        }
+                        if (avatarScreen != null) { avatarScreen.avatarChanged(peer); }
                         Diag.warn("avatar " + peer.key() + ": "
                                 + shortMessage(error));
-                        if (avatarsUnavailable)
+                        if (loaded.stopped) { retry = false; }
+                    }
+                    else if (loaded.images[i] != null)
+                    {
+                        if (peer.avatar != null
+                                && peer.avatar.photoId == photoIds[i])
                         {
-                            Diag.warn("avatars disabled for this session:"
-                                    + " this handset refused a second"
-                                    + " connection");
+                            avatarCache.put(peer, loaded.images[i]);
+                            if (avatarScreen != null)
+                            {
+                                avatarScreen.avatarChanged(peer);
+                            }
                         }
-                        // Chained on every other failure, because the next row
-                        // may well succeed. Not on a memory refusal: that would
-                        // walk the whole visible list refusing one row at a
-                        // time. The next scroll asks again, by which time the
-                        // collect this already ran may have changed the answer.
-                        if (!noRoom) { loadVisibleAvatars(); }
+                        else
+                        {
+                            // The photo changed under us; the stored bytes
+                            // belong to the old one.
+                            avatarCache.fail(peer);
+                            try { avatarDiskCache.clear(); }
+                            catch (Throwable ignored) { }
+                        }
+                    }
+                    else if (loaded.stopped)
+                    {
+                        // Claimed but never attempted. Failing it clears the
+                        // LOADING state; no repaint is needed, the placeholder
+                        // the reader already saw stays in place.
+                        avatarCache.fail(peer);
                     }
                 }
-            });
-            if (!submitted) { avatarCache.fail(peer); }
-            return;
+                if (avatarsUnavailable)
+                {
+                    Diag.warn("avatars disabled for this session: this handset"
+                            + " refused a second connection");
+                    retry = false;
+                }
+                if (retry) { loadVisibleAvatars(); }
+            }
+
+            public void onFailure(Throwable error)
+            {
+                if (!asked.sameSession())
+                {
+                    dropStale("dialog avatar");
+                    return;
+                }
+                for (int i = 0; i < size; i++)
+                {
+                    avatarCache.fail(peers[i]);
+                    if (avatarScreen != null)
+                    {
+                        avatarScreen.avatarChanged(peers[i]);
+                    }
+                }
+                Diag.warn("avatars: " + shortMessage(error));
+            }
+        });
+        if (!submitted)
+        {
+            for (int i = 0; i < size; i++) { avatarCache.fail(peers[i]); }
         }
     }
 
@@ -8387,9 +8448,21 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
                 count == 1 ? first : count + " new messages");
     }
 
-    /** Prove the loopback bridge is installed, from the chat list menu. */
-    private void testNotification()
+    /**
+     * Prove the loopback bridge is installed, from wherever the command lives.
+     *
+     * The entry was originally in the chat list menu only, so the callback could
+     * assume {@code dialogList} existed. Settings is reachable from the start
+     * screen and from error screens too, where it does not; the screen the
+     * command came from is the only landing point that is right in all three
+     * cases. The test itself is deliberately independent of the Notifications
+     * switch: it checks the bridge, not the policy around automatic notes.
+     */
+    private void testNotification(Displayable origin)
     {
+        final Displayable back = origin != null ? origin
+                : (navigation.current() == null ? display.getCurrent()
+                        : navigation.current());
         final AsyncScope.Token asked = scope.capture();
         showBusy("Notifications", "Asking the bridge on 127.0.0.1:4711...");
         boolean submitted = worker.submit(new Worker.Task()
@@ -8405,41 +8478,40 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
         {
             public void onSuccess(Object result)
             {
-                if (!asked.sameSession() || dialogList == null)
+                if (!asked.sameSession())
                 {
                     dropStale("notify.test");
                     return;
                 }
-                restoreScreen(navigation.current());
+                restoreScreen(back);
                 String error = (String) result;
                 if (error == null)
                 {
                     showAlert("The bridge displayed the note.", AlertType.INFO,
-                            dialogList);
+                            back);
                 }
                 else
                 {
                     showAlert(error + "\nInstall NotiHelper, start it once, "
-                            + "and try again.",
-                            AlertType.INFO, dialogList);
+                            + "and try again.", AlertType.INFO, back);
                 }
             }
 
             public void onFailure(Throwable error)
             {
-                if (!asked.sameSession() || dialogList == null)
+                if (!asked.sameSession())
                 {
                     dropStale("notify.test");
                     return;
                 }
-                restoreScreen(dialogList);
-                showAlertThen("Notification failed", error, dialogList);
+                restoreScreen(back);
+                showAlertThen("Notification failed", error, back);
             }
         });
         if (!submitted)
         {
-            restoreScreen(dialogList);
-            showRefused("Not tested", "Try again in a moment.", dialogList);
+            restoreScreen(back);
+            showRefused("Not tested", "Try again in a moment.", back);
         }
     }
 
@@ -9096,17 +9168,18 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
         Message[] history;
     }
 
-    private static final class AvatarLoad
+    /** One worker round trip's worth of dialog avatars. */
+    private static final class AvatarBatch
     {
-        final Peer peer;
-        final long photoId;
-        final Image image;
+        final Image[] images;
+        final Throwable[] errors;
+        /** Set when a handset-wide refusal made the rest of the batch pointless. */
+        boolean stopped;
 
-        AvatarLoad(Peer peer, long photoId, Image image)
+        AvatarBatch(int size)
         {
-            this.peer = peer;
-            this.photoId = photoId;
-            this.image = image;
+            images = new Image[size];
+            errors = new Throwable[size];
         }
     }
 
@@ -13472,6 +13545,7 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
     {
         settingsScreen = new SettingsScreen(connectionConfig, appSettings);
         settingsScreen.addCommand(SettingsScreen.CMD_SAVE);
+        settingsScreen.addCommand(cmdTestNotify);
         settingsScreen.addCommand(cmdBack);
         settingsScreen.addCommand(cmdLog);
         settingsScreen.addCommand(cmdDiag);

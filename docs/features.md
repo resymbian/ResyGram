@@ -82,7 +82,9 @@ claimed for those additions.
 
 ## Not implemented
 
-- Background notifications of any kind.
+- Push notifications from Telegram while the MIDlet is closed. The NotiHelper
+  bridge shows a native note for arrivals while ResyGram is running; it cannot
+  wake the client or receive updates on its behalf (see the README).
 - Secret chats, voice calls or video calls.
 - Sending photos, files, voice, video or other attachments.
 - Downloading or opening incoming files, voice, music, video, GIFs, stickers,

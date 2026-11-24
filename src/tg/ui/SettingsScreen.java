@@ -87,8 +87,9 @@ public final class SettingsScreen extends Form
         append(mediaPreviews);
         append(notifications);
         append("A note needs the NotiHelper bridge listening on 127.0.0.1:4711. "
-             + "It also leaves the message in Messaging > Inbox. Without it "
-             + "nothing is sent and nothing fails.");
+             + "Use Test notification in the menu to check it. It also leaves "
+             + "the message in Messaging > Inbox. Without it nothing is sent "
+             + "and nothing fails.");
         append(theme);
         append(logLevel);
         append(remoteLog);

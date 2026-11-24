@@ -52,8 +52,8 @@ would keep open:
       `messages.sendMedia`, with the byte count on the progress bar
 - [x] Background delivery with a native note and an Inbox entry, through the
       loopback bridge (`socket://127.0.0.1:4711`) shared with Discofi and
-      maintained as [NotiHelper]; off in Settings, and a Test notification entry
-      proves the bridge is installed
+      maintained as [NotiHelper]; off in Settings, and Test notification in the
+      Settings and chat list menus proves the bridge is installed
 - [x] A loading bar, not a dot ring: the splash and every blocking step
       (connect, sign-in, sending) sweep a progress bar so the wait reads as a
       process. The busy screen starts on `showNotify` and stops on `hideNotify`,

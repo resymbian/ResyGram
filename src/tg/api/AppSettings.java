@@ -84,6 +84,7 @@ public final class AppSettings
     {
         store.saveString("ui.media.previews", mediaPreviews ? "1" : "0");
         store.saveString("ui.avatars", loadAvatars ? "1" : "0");
+        store.saveString("ui.notify", notifications ? "1" : "0");
         store.saveString("log.level", String.valueOf(logLevel));
         store.saveString("log.remote.enabled", remoteLog ? "1" : "0");
         store.saveString("log.remote.host",

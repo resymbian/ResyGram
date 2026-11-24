@@ -43,6 +43,8 @@ public class DialogListScreen extends SoftKeyCanvas
     private int top;
     private String connection = "";
     private String updates = "";
+    /** Composed once in setStatus rather than on every paint. */
+    private String status = "";
     private String emptyText = "(no chats)";
     private String title = "Chats";
     private ActivationListener activationListener;
@@ -105,6 +107,36 @@ public class DialogListScreen extends SoftKeyCanvas
     public void avatarsChanged() { repaint(); }
 
     /**
+     * Repaint only the row an avatar just arrived for.
+     *
+     * An avatar used to invalidate the whole canvas, once from the list and
+     * again from the activity spinner. With a handful of visible chats that is
+     * a full list re-layout, re-wrap and re-clip per picture. Row bounds are
+     * known here, so only the pixels that changed need painting; a peer that is
+     * off screen needs none at all - the cache will serve it on scroll.
+     */
+    public void avatarChanged(Peer peer)
+    {
+        updateMetrics();
+        int index = find(peer);
+        if (index < 0 || index < top - 1
+                || index > top + metrics.visibleRows() + 1) { return; }
+        int y = metrics.bodyTop + (index - top) * metrics.rowHeight
+                + touchPaintOffsetY;
+        int height = metrics.rowHeight;
+        if (y < metrics.bodyTop)
+        {
+            height -= metrics.bodyTop - y;
+            y = metrics.bodyTop;
+        }
+        if (y + height > metrics.bodyBottom)
+        {
+            height = metrics.bodyBottom - y;
+        }
+        if (height > 0) { repaint(0, y, metrics.width, height); }
+    }
+
+    /**
      * Install a list, anchored on a peer rather than on a row index.
      *
      * The chat list reorders under the reader: a message arriving in a chat
@@ -164,6 +196,8 @@ public class DialogListScreen extends SoftKeyCanvas
         }
         this.connection = nextConnection;
         this.updates = nextUpdates;
+        status = nextUpdates.length() == 0 ? nextConnection
+                : (nextConnection + "/" + nextUpdates);
         repaint();
     }
 
@@ -290,10 +324,8 @@ public class DialogListScreen extends SoftKeyCanvas
         String count = windowLabel.length() > 0 ? windowLabel
                 : (dialogs.length == 0 ? ("0/" + totalCount)
                         : ((windowStart + selected + 1) + "/" + totalCount));
-        String state = connection;
-        if (updates.length() > 0) { state += "/" + updates; }
         UiChrome.header(g, theme, metrics, titleFont,
-                title + " " + count, state);
+                title + " " + count, status);
 
         int visible = metrics.visibleRows();
         if (!touch.isDragging()) { ensureVisible(); }

@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.2.4
+
+### Changed
+
+- UI responsiveness: the activity spinner now repaints only the header instead
+  of the whole canvas, string clipping uses a halving search instead of
+  measuring every prefix, and compact dates are cached instead of creating a
+  `Calendar` for every row of every frame.
+- Chat avatars load in batches of four per worker round trip, repaint only the
+  row they belong to, and are found in the RMS cache without rewriting the
+  record or decoding its image bytes on every lookup.
+
+### Added
+
+- Test notification is available from Settings as well as the chat list menu,
+  so the NotiHelper bridge can be checked before signing in.
+
+### Fixed
+
+- The Notifications switch in Settings is now saved, not just loaded.
+
 ## 0.2.3
 
 Heat/battery fixes for the E51:

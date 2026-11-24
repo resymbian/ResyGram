@@ -265,6 +265,14 @@ public final class EmulatorSmokeTest
         Assert.isTrue(label + " opened a different screen", opened != start);
         System.out.println("  " + label + " -> " + describe(opened));
         checkMenuOrdering(label, opened);
+        if ("Settings".equals(label))
+        {
+            // The NotiHelper check belongs next to the switch that governs it.
+            // A command that exists but was never added to this Form is
+            // invisible to every other test here.
+            Assert.isTrue("Settings offers Test notification",
+                    byLabel(opened, "Test notification") != null);
+        }
 
         Command back = byLabel(opened, "Back");
         Assert.isTrue(label + " offers Back", back != null);

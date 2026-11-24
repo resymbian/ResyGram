@@ -52,12 +52,16 @@ public final class AvatarCache
 
     public int capacity() { return capacity; }
 
+    /**
+     * Read-only lookup for the painter. Touching the LRU age here used to write
+     * one array slot per visible row of every frame, from the display thread,
+     * for no benefit: an avatar that is already on screen does not need to be
+     * re-admitted. Use and recency are recorded when it is loaded instead.
+     */
     public synchronized Image get(Peer peer)
     {
         int at = find(peer);
-        if (at < 0) { return null; }
-        ages[at] = ++tick;
-        return images[at];
+        return at < 0 ? null : images[at];
     }
 
     /** Claims a missing entry for one loader. */

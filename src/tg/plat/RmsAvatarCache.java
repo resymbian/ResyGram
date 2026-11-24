@@ -14,14 +14,20 @@ import tg.tl.TlWriter;
 /**
  * Bounded RMS cache of compressed dialog-avatar thumbnails.
  *
- * At most twelve records and 256 KiB are retained. Full-size photos never
+ * At most sixteen records and 256 KiB are retained. Full-size photos never
  * enter this store.
+ *
+ * Only the record header is read while looking for a match or an eviction
+ * candidate: decoding a record used to copy its whole JPEG byte array just to
+ * compare five scalar fields, and a hit also rewrote the record to refresh its
+ * timestamp. On a small handset that made the disk cache slower than the
+ * network round trip it was meant to avoid.
  */
 public final class RmsAvatarCache implements AccountStore
 {
     private static final String STORE = "tgavatars";
     private static final int MAGIC = 0x54474131; // TGA1
-    private static final int MAX_ENTRIES = 12;
+    private static final int MAX_ENTRIES = 16;
     private static final int MAX_TOTAL = 256 * 1024;
     private static final int MAX_ENTRY = 64 * 1024;
 
@@ -38,16 +44,18 @@ public final class RmsAvatarCache implements AccountStore
             while (en.hasNextElement())
             {
                 int id = en.nextRecordId();
-                Entry entry = decode(rs.getRecord(id));
+                Entry entry = header(rs.getRecord(id));
                 if (entry != null && entry.accountId == accountId
                         && entry.test == test && entry.kind == peer.kind
                         && entry.peerId == peer.id
                         && entry.photoId == peer.avatar.photoId)
                 {
-                    entry.savedAt = System.currentTimeMillis();
-                    byte[] touched = encode(entry);
-                    rs.setRecord(id, touched, 0, touched.length);
-                    return entry.bytes;
+                    // The image bytes are copied only for the one record that
+                    // matched. A hit must not write: RMS setRecord costs more
+                    // than the decode it saves, and happens on every repaint of
+                    // a cached row after a cache rebuild.
+                    Entry full = decode(rs.getRecord(id));
+                    return full == null ? null : full.bytes;
                 }
             }
             return null;
@@ -107,7 +115,7 @@ public final class RmsAvatarCache implements AccountStore
             while (en.hasNextElement())
             {
                 int id = en.nextRecordId();
-                Entry entry = decode(rs.getRecord(id));
+                Entry entry = header(rs.getRecord(id));
                 if (entry == null || (entry.accountId == accountId
                         && entry.test == test && entry.kind == peer.kind
                         && entry.peerId == peer.id))
@@ -146,7 +154,7 @@ public final class RmsAvatarCache implements AccountStore
             while (en.hasNextElement())
             {
                 int id = en.nextRecordId();
-                Entry entry = decode(rs.getRecord(id));
+                Entry entry = header(rs.getRecord(id));
                 long savedAt = entry == null ? Long.MIN_VALUE : entry.savedAt;
                 if (oldestId < 0 || savedAt < oldestAt)
                 {
@@ -161,24 +169,36 @@ public final class RmsAvatarCache implements AccountStore
         return true;
     }
 
+    /** Scalar fields only - no copy of the JPEG bytes inside the record. */
+    private static Entry header(byte[] raw)
+    {
+        try { return read(new TlReader(raw), false); }
+        catch (Throwable ignored) { return null; }
+    }
+
     private static Entry decode(byte[] raw)
     {
-        try
+        try { return read(new TlReader(raw), true); }
+        catch (Throwable ignored) { return null; }
+    }
+
+    private static Entry read(TlReader reader, boolean withBytes)
+            throws Exception
+    {
+        if (reader.readInt() != MAGIC) { return null; }
+        Entry out = new Entry();
+        out.accountId = reader.readLong();
+        out.test = reader.readInt() != 0;
+        out.kind = reader.readInt();
+        out.peerId = reader.readLong();
+        out.photoId = reader.readLong();
+        out.savedAt = reader.readLong();
+        if (withBytes)
         {
-            TlReader reader = new TlReader(raw);
-            if (reader.readInt() != MAGIC) { return null; }
-            Entry out = new Entry();
-            out.accountId = reader.readLong();
-            out.test = reader.readInt() != 0;
-            out.kind = reader.readInt();
-            out.peerId = reader.readLong();
-            out.photoId = reader.readLong();
-            out.savedAt = reader.readLong();
             out.bytes = reader.readBytes();
             if (out.bytes == null || out.bytes.length > MAX_ENTRY) { return null; }
-            return out;
         }
-        catch (Throwable ignored) { return null; }
+        return out;
     }
 
     private static byte[] encode(Entry entry)
