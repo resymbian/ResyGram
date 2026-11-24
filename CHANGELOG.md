@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.2.3
+
+Heat/battery fixes for the E51:
+
+- The background activity pulse now repaints 2.5x less often (500 ms instead
+  of 200 ms) and does nothing at all while `pauseApp()` is in effect or the
+  current Canvas is not shown. A backgrounded MIDlet was repainting a screen
+  nobody could see.
+- `EmojiText.drawString()` only loads the sprite sheet when a message actually
+  contains a mapped emoji. Plain text messages no longer touch the PNG.
+- Sprite decode attempts are throttled to one per second and capped at three;
+  `release()` adds a short cooldown so memory-pressure shed/reload cycles do not
+  decode the sheet twice in the same paint.
+- The atlas is trimmed from 195 to 176 glyphs: the newest faces, animals and
+  nature are kept, while the long tail of objects is dropped. Decoded heap goes
+  from ~210 KB to ~180 KB.
+
 ## 0.2.2
 
 Fixes from the Nokia E51:

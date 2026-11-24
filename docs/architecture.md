@@ -161,8 +161,8 @@ request that produces the largest response the client inflates, and each of the
 three image decodes — the full photo, a dialog-list avatar, an inline thumbnail.
 If there is not enough it sheds, in order of what each is measured to be worth:
 the cached full-screen photo (~300 KB), the conversation's decoded thumbnails
-(~190 KB), the avatar cache (~150 KB), the emoji sheet (~210 KB decoded). That
-is about 850 KB, roughly 17% of a 5 MB heap — enough to get a chat open, not enough to
+(~190 KB), the avatar cache (~150 KB), the emoji sheet (~180 KB decoded). That
+is about 820 KB, roughly 16% of a 5 MB heap — enough to get a chat open, not enough to
 rescue a 2 MB decode, which is why a photo that cannot fit is refused with both
 numbers instead of attempted.
 

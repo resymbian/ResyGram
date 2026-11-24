@@ -30,6 +30,7 @@ public final class EmojiText
     private static Image sheet;
     private static boolean loadAttempted;
     private static int loadFailures;
+    private static long nextLoadAt;
 
     private EmojiText() { }
 
@@ -93,7 +94,9 @@ public final class EmojiText
     public static void drawString(Graphics g, String text, int x, int y, Font font)
     {
         if (text == null) { return; }
-        Image sprites = sprites();
+        // Loading is lazy: a plain text message must not decode the sheet just
+        // because the drawing code passed through here.
+        Image sprites = null;
         int n = text.length();
         int at = 0;
         int runStart = -1;
@@ -104,6 +107,7 @@ public final class EmojiText
             int cell = find(cp);
             if (cell >= 0)
             {
+                if (sprites == null) { sprites = sprites(); }
                 x = flush(g, text, runStart, at, x, y, font);
                 runStart = -1;
                 if (sprites != null)
@@ -290,24 +294,34 @@ public final class EmojiText
      * Drop the decoded sprite sheet so it can be collected, and allow it to be
      * loaded again on the next paint.
      *
-     * All three fields have to be reset. {@code loadAttempted} latches true only
+     * All four fields have to be reset. {@code loadAttempted} latches true only
      * after a successful load, a missing asset or three failed decodes; nulling
      * the sheet alone would leave emoji disabled for the rest of the session.
+     * The short cooldown stops a shed/reload/shed cycle from decoding the sheet
+     * again on the very next paint, which was measurable as handset heat.
      *
      * The sheet is the largest thing on the pressure ladder; on a 32bpp handset
-     * the 256x208 PNG decodes to roughly 210 KB of live heap.
+     * the 256x176 PNG decodes to roughly 180 KB of live heap.
      */
     public static synchronized void release()
     {
         sheet = null;
         loadAttempted = false;
         loadFailures = 0;
+        nextLoadAt = System.currentTimeMillis() + 1000L;
     }
 
     private static synchronized Image sprites()
     {
         if (sheet != null) { return sheet; }
         if (loadAttempted) { return null; }
+
+        long now = System.currentTimeMillis();
+        if (now < nextLoadAt) { return null; }
+        // Even if every emoji on a line calls this, only one decode per second
+        // may be attempted. Without this the three retries happened inside a
+        // single repaint, on the display thread.
+        nextLoadAt = now + 1000L;
 
         InputStream in = null;
         try
@@ -325,8 +339,8 @@ public final class EmojiText
         catch (Throwable ignored)
         {
             // A transient decode/OOM failure used to latch forever and blank
-            // every emoji for the rest of the session. Retry a few times; only
-            // a dead PNG decoder is treated as permanent.
+            // every emoji for the rest of the session. Retry at most three
+            // times, never more often than once a second.
             sheet = null;
             loadFailures++;
             if (loadFailures >= 3) { loadAttempted = true; }

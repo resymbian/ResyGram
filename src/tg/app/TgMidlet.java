@@ -380,6 +380,7 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
     private boolean syncBusy;
     private boolean avatarBusy;
     private volatile boolean activityPulseRunning;
+    private volatile boolean paused;
 
     /**
      * Background maintenance, so it cannot refuse a user.
@@ -1042,6 +1043,7 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
     {
         if (display != null)
         {
+            paused = false;
             if (telegram != null) { telegram.resume(); }
             return;                            // returning from pause
         }
@@ -1108,8 +1110,23 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
         boolean busy = foregroundBusy || syncBusy || avatarBusy;
         UiChrome.setWorking(busy);
         if (busy) { ensureActivityPulse(); }
+        repaintActivityCanvas();
+    }
+
+    /**
+     * Repaint only a Canvas that is actually on screen.
+     *
+     * A paused MIDlet still has a "current" Displayable on some S60 builds, and
+     * repainting it five times a second was enough to keep the handset warm.
+     */
+    private void repaintActivityCanvas()
+    {
+        if (paused) { return; }
         Displayable current = display == null ? null : display.getCurrent();
-        if (current instanceof Canvas) { ((Canvas) current).repaint(); }
+        if (current instanceof Canvas && ((Canvas) current).isShown())
+        {
+            ((Canvas) current).repaint();
+        }
     }
 
     /**
@@ -1117,7 +1134,8 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
      *
      * The thread exits by itself when the last worker finishes, and a new one is
      * started by the next transition. It touches nothing but the current Canvas,
-     * so it cannot outlive the indicator it exists for.
+     * so it cannot outlive the indicator it exists for. Half a second between
+     * ticks is plenty for a spinner and much cheaper on a 200 MHz handset.
      */
     private void ensureActivityPulse()
     {
@@ -1129,14 +1147,12 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
             {
                 while (UiChrome.isWorking())
                 {
-                    UiChrome.tick();
-                    Displayable current = display == null
-                            ? null : display.getCurrent();
-                    if (current instanceof Canvas)
+                    if (!paused)
                     {
-                        ((Canvas) current).repaint();
+                        UiChrome.tick();
+                        repaintActivityCanvas();
                     }
-                    try { Thread.sleep(200L); }
+                    try { Thread.sleep(500L); }
                     catch (InterruptedException ignored) { return; }
                 }
                 activityPulseRunning = false;
@@ -1353,6 +1369,8 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
     protected void pauseApp()
     {
         Diag.info("pauseApp");
+        // Stop the activity pulse from repainting a screen the user cannot see.
+        paused = true;
         saveDraftNow();
         if (telegram != null) { telegram.pause(); }
     }
@@ -1360,6 +1378,7 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
     protected void destroyApp(boolean unconditional)
     {
         Diag.info("destroyApp");
+        paused = true;
         // First: the pressure hook is a static and would otherwise hold this
         // MIDlet, and everything it references, alive past teardown.
         MemoryPressure.setRelief(null);

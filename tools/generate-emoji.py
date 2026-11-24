@@ -46,7 +46,7 @@ def main() -> None:
         cp = ord(char)
         if cp not in cps:
             cps.append(cp)
-    cps = cps[:195]
+    cps = cps[:176]
 
     columns = 16
     rows = (len(cps) + columns - 1) // columns
