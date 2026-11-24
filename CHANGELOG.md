@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.1
+
+Maintenance rebuild of the 0.2.0 code with a higher `MIDlet-Version`, so the
+Nokia application manager accepts it as an upgrade instead of rejecting a
+reinstall of the same version. No source changes.
+
 ## 0.2.0
 
 What followed the first build: attachment handling both ways, and system
