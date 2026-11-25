@@ -90,9 +90,10 @@ public final class Notifier
             String outcome = deliverTo(ADDRESSES[i], title, text);
             if (outcome == null) { return null; }
             reason = outcome;
-            // A permission failure repeats on every alias; there is no point
-            // spending another refused socket on it.
-            if (lastError != null && lastError.indexOf("SecurityException") >= 0)
+            // A permission failure repeats on every alias; a refusal by the bridge
+            // means connection succeeded, so do not overwrite with -34 from localhost.
+            if (lastError != null && (lastError.indexOf("SecurityException") >= 0
+                    || lastError.indexOf("refused") >= 0))
             {
                 break;
             }

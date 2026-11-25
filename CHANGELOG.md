@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.2.8
+
+### Added
+
+- Keypad link selection: Pressing Fire / key 5 on a focused message with links
+  opens the link picker list, allowing non-touch keypad phones (like Nokia E51)
+  to choose and open links one by one in Opera Mini or the default browser.
+- Expanded text emoji fallbacks: Added intuitive text replacements for over 70
+  common Unicode emoji codepoints (smilies, gestures, hearts, objects) instead
+  of the generic `[emoji]`.
+
+### Changed
+
+- All videos are now streamed sequentially via loopback HTTP (`VideoStreamer`),
+  freeing phone RAM and internal memory from large video downloads.
+- Notification bridge: Do not retry `localhost` if the bridge refused the note,
+  preventing a harmless refusal from being overwritten by a DNS `-34` error.
+
 ## 0.2.7
 
 ### Added

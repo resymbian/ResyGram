@@ -7411,7 +7411,21 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
                 {
                     downloadDocument(message.media.document);
                 }
-                else { showReactionPalette(messageId); }
+                else
+                {
+                    if (message != null)
+                    {
+                        message.ensureEntities();
+                        boolean revealed = screen.isSpoilerRevealed(messageId);
+                        if (hasVisibleEntityAction(message, message.entities, revealed))
+                        {
+                            entityMessage = message;
+                            showEntityPicker();
+                            return;
+                        }
+                    }
+                    showReactionPalette(messageId);
+                }
             }
         });
         screen.setLinkListener(new ChatScreen.LinkListener()
@@ -12445,8 +12459,7 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
             return;
         }
         final boolean video = isVideoDocument(document);
-        if (video && document.size > MAX_SAVED_VIDEO_BYTES
-                && streamDocument(document))
+        if (video && streamDocument(document))
         {
             return;
         }
