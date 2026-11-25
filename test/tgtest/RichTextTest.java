@@ -24,6 +24,7 @@ public final class RichTextTest implements Test
         mixedStylesUseCombinedFontMetrics();
         blockquoteUsesItsInsetDuringWrap();
         spoilerRevealDoesNotReflow();
+        sequenceEmojiDoesNotFreezeWrap();
     }
 
     private static void mixedStylesUseCombinedFontMetrics()
@@ -73,6 +74,16 @@ public final class RichTextTest implements Test
         quote.resetMessages(new Message[] { quoted });
         Assert.isTrue("quote inset participates in wrapping",
                 quote.transcriptLineCount() > ordinary.transcriptLineCount());
+    }
+
+    private static void sequenceEmojiDoesNotFreezeWrap()
+    {
+        ExposedChat chat = new ExposedChat(Theme.byId(Theme.LIGHT));
+        // Spanish flag is \uD83C\uDDEA\uD83C\uDDF8 (ES), an emoji sequence handled by matchSequence
+        String text = "HazteOir \uD83C\uDDEA\uD83C\uDDF8 alerta y peticion";
+        chat.resetMessages(new Message[] { message(1, text) });
+        Assert.isTrue("emoji sequence message wrapped without freezing",
+                chat.transcriptLineCount() > 0);
     }
 
     private static void spoilerRevealDoesNotReflow()

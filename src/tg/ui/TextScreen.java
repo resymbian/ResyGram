@@ -128,6 +128,7 @@ public class TextScreen extends SoftKeyCanvas
         while (i < n)
         {
             int next = EmojiText.nextBoundary(s, i);
+            if (next <= i) { next = i + 1; }
             if (EmojiText.substringWidth(s, start, next - start, font) > width)
             {
                 return i > start ? i : next;

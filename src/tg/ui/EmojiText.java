@@ -54,6 +54,7 @@ public final class EmojiText
         while (at < end)
         {
             int next = tokenEnd(text, at, end);
+            if (next <= at) { next = at + 1; }
             width += tokenWidth(text, at, end, font);
             at = next;
         }
@@ -77,6 +78,7 @@ public final class EmojiText
         while (at < end)
         {
             int next = tokenEnd(text, at, end);
+            if (next <= at) { next = at + 1; }
             used += tokenWidth(text, at, end, font);
             if (used > width) { return at; }
             at = next;
@@ -108,6 +110,7 @@ public final class EmojiText
         while (at < n)
         {
             int next = tokenEnd(text, at, n);
+            if (next <= at) { next = at + 1; }
             int cp = codePoint(text, at, n);
             int packed = matchSequence(text, at, n);
             int cell = packed >= 0 ? packed & 0xffff : find(cp);
@@ -180,13 +183,14 @@ public final class EmojiText
     {
         if (at >= end) { return at; }
         int packed = matchSequence(text, at, end);
-        if (packed >= 0) { return packed >>> 16; }
+        if (packed >= 0) { return at + (packed >>> 16); }
         int cp = codePoint(text, at, end);
         int next = baseEnd(text, at, end, cp);
         // A compact client renders a ZWJ sequence as its first useful base, so
         // the whole sequence is one token. Plain text keeps its own boundary -
         // a stray ZWJ between two letters must not glue them together.
-        return (find(cp) >= 0 || isEmoji(cp)) ? zwjEnd(text, next, end) : next;
+        int res = (find(cp) >= 0 || isEmoji(cp)) ? zwjEnd(text, next, end) : next;
+        return res > at ? res : at + 1;
     }
 
     /** Width of the single token at {@code at}. */

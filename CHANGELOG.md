@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.9
+
+### Fixed
+
+- Fixed critical UI freeze / infinite loop when rendering emoji sequences (such as
+  the Spanish flag 🇪🇸 or keycaps) positioned past the start of a message.
+  `tokenEnd` was returning the relative sequence length instead of advancing the
+  character pointer, causing the wrap and render loops to jump backward and hang
+  the application completely.
+- Added strict forward-progress guards across all text layout and wrapping loops
+  in `ChatScreen`, `RichText`, and `EmojiText` to guarantee the UI thread can
+  never become trapped in an infinite loop.
+
 ## 0.2.8
 
 ### Added

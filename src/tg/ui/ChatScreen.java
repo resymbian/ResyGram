@@ -1637,7 +1637,8 @@ public class ChatScreen extends Canvas
         {
             int end = lineEnd(text, start, width);
             count++;
-            start = skipSpace(text, end);
+            int next = skipSpace(text, end);
+            start = next > start ? next : start + 1;
         }
         return count == 0 ? 1 : count;
     }
@@ -1652,6 +1653,7 @@ public class ChatScreen extends Canvas
         while (start < text.length() && at < lines.length)
         {
             int end = lineEndRich(text, start, width, entities);
+            if (end <= start) { end = Math.min(text.length(), start + 1); }
             lines[at] = text.substring(start, end);
             outgoing[at] = isOutgoing;
             meta[at] = false;
@@ -1659,7 +1661,8 @@ public class ChatScreen extends Canvas
             lineMessageOffsets[at] = messageOffset++;
             lineTextStarts[at] = start;
             at++;
-            start = skipSpace(text, end);
+            int next = skipSpace(text, end);
+            start = next > start ? next : start + 1;
         }
         return at;
     }
@@ -1673,7 +1676,8 @@ public class ChatScreen extends Canvas
         {
             int end = lineEndRich(text, start, width, entities);
             count++;
-            start = skipSpace(text, end);
+            int next = skipSpace(text, end);
+            start = next > start ? next : start + 1;
         }
         return count == 0 ? 1 : count;
     }
@@ -1694,8 +1698,9 @@ public class ChatScreen extends Canvas
         {
             if (text.charAt(i) == ' ') { return i; }
         }
+        int boundary = EmojiText.nextBoundary(text, start);
         return fit > start ? fit
-                : Math.min(limit, EmojiText.nextBoundary(text, start));
+                : (boundary > start ? Math.min(limit, boundary) : Math.min(limit, start + 1));
     }
 
     private int wrapInto(String text, int width, int at, boolean isOutgoing,
@@ -1705,6 +1710,7 @@ public class ChatScreen extends Canvas
         while (start < text.length() && at < lines.length)
         {
             int end = lineEnd(text, start, width);
+            if (end <= start) { end = Math.min(text.length(), start + 1); }
             lines[at] = text.substring(start, end);
             outgoing[at] = isOutgoing;
             meta[at] = false;
@@ -1712,7 +1718,8 @@ public class ChatScreen extends Canvas
             lineMessageOffsets[at] = messageOffset;
             at++;
             messageOffset++;
-            start = skipSpace(text, end);
+            int next = skipSpace(text, end);
+            start = next > start ? next : start + 1;
         }
         return at;
     }
@@ -1746,8 +1753,9 @@ public class ChatScreen extends Canvas
         }
         // Nothing fits and nothing to break on - emit one token so wrapping
         // always makes progress.
+        int boundary = EmojiText.nextBoundary(text, start);
         return fit > start ? fit
-                : Math.min(limit, EmojiText.nextBoundary(text, start));
+                : (boundary > start ? Math.min(limit, boundary) : Math.min(limit, start + 1));
     }
 
     private static int skipSpace(String text, int at)

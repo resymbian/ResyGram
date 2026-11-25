@@ -44,6 +44,7 @@ public final class RichText
         while (at < end)
         {
             int next = Math.min(end, EmojiText.nextBoundary(text, at));
+            if (next <= at) { next = at + 1; }
             width += EmojiText.substringWidth(text, at, next - at,
                     font(flagsAt(entities, at)));
             at = next;
@@ -60,6 +61,7 @@ public final class RichText
         while (at < end)
         {
             int next = Math.min(end, EmojiText.nextBoundary(text, at));
+            if (next <= at) { next = at + 1; }
             used += EmojiText.substringWidth(text, at, next - at,
                     font(flagsAt(entities, at)));
             if (used > width) { return at; }
@@ -85,6 +87,7 @@ public final class RichText
         while (at < end)
         {
             int next = Math.min(end, EmojiText.nextBoundary(text, at));
+            if (next <= at) { next = at + 1; }
             int width = EmojiText.substringWidth(text, at, next - at,
                     font(flagsAt(entities, at)));
             if (xOffset >= x && xOffset < x + width)
