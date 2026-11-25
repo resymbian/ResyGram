@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.7
+
+### Added
+
+- "Borrar vídeos" command in the root/chat-list menu to remove temporary video
+  copies immediately, without waiting for resume.
+
 ## 0.2.6
 
 ### Changed

@@ -223,6 +223,7 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
     private final Command cmdSettings = new Command("Settings", Command.SCREEN, 8);
     private final Command cmdTestNotify =
             new Command("Test notification", Command.SCREEN, 11);
+    private final Command cmdCleanVideos = new Command("Borrar vídeos", Command.SCREEN, 12);
     private final Command cmdLogOut  = new Command("Log out", Command.SCREEN, 9);
     private final Command cmdLogOutEverywhere =
             new Command("Log out everywhere", Command.SCREEN, 10);
@@ -2141,6 +2142,12 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
         {
             testNotification(d);
         }
+        else if (c == cmdCleanVideos)
+        {
+            try { cleanupReturnedVideo(); }
+            catch (Throwable ignored) { }
+            showAlert("Vídeos temporales borrados", AlertType.INFO, display.getCurrent());
+        }
         else if (c == cmdSettings)
         {
             showSettings();
@@ -2412,7 +2419,7 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
         System.arraycopy(lines, 0, shown, 0, count);
         screen.setIntro(shown);
         screen.setSoftKeys(cmdConnect, new Command[] {
-            cmdSettings, cmdDiag, cmdCrashLog, cmdLog, cmdExit
+            cmdSettings, cmdCleanVideos, cmdDiag, cmdCrashLog, cmdLog, cmdExit
         });
         screen.setCommandListener(this);
         resetRoot(screen);
@@ -3374,6 +3381,7 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
             dialogList.addCommand(cmdDiag);
             dialogList.addCommand(cmdCrashLog);
             dialogList.addCommand(cmdSettings);
+            dialogList.addCommand(cmdCleanVideos);
             dialogList.addCommand(cmdTestNotify);
             dialogList.addCommand(cmdOutbox);
             dialogList.addCommand(cmdReconnect);
@@ -3388,7 +3396,7 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
                 cmdFindChat, cmdChatInfo, cmdJoinByLink, cmdFilter,
                 cmdClearFilter, cmdPin, cmdUnpin, cmdArchive, cmdUnarchive,
                 cmdFolders, cmdSaved, cmdMyProfile, cmdSettings,
-                cmdOutbox, cmdReconnect, cmdDiag, cmdCrashLog,
+                cmdCleanVideos, cmdOutbox, cmdReconnect, cmdDiag, cmdCrashLog,
                 cmdTestNotify, cmdLog, cmdLogOut, cmdLogOutEverywhere,
                 cmdExit
             });
