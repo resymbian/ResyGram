@@ -5,6 +5,7 @@ import java.util.Vector;
 
 import tg.api.Api;
 import tg.api.DownloadToken;
+import tg.api.DocumentRef;
 import tg.api.PhotoInputStream;
 import tg.api.PhotoRef;
 import tg.api.PhotoSizeRef;
@@ -26,6 +27,7 @@ public final class PhotoStreamTest implements Test
         oversizedChunk();
         advertisedBound();
         cdnRedirect();
+        documentOffset();
     }
 
     private static void chunkedEof() throws Exception
@@ -109,6 +111,46 @@ public final class PhotoStreamTest implements Test
         source.cdn = true;
         PhotoInputStream in = stream(source, 100, new DownloadToken());
         expectReadFailure("CDN redirect", in, "CDN");
+        in.close();
+    }
+
+    private static void documentOffset() throws Exception
+    {
+        byte[] content = new byte[70000];
+        for (int i = 0; i < content.length; i++) { content[i] = (byte) (i & 0x7f); }
+        Script source = new Script(content);
+        DocumentRef document = new DocumentRef();
+        document.id = 31;
+        document.accessHash = 32;
+        document.fileReference = new byte[] { 3 };
+        document.dcId = 2;
+        document.size = content.length;
+        document.mimeType = "video/mp4";
+
+        int start = 32768;
+        PhotoInputStream in = new PhotoInputStream(source, document, start,
+                new DownloadToken());
+        Assert.equal("expected bytes excludes the skipped prefix",
+                content.length - start, in.expectedBytes());
+
+        byte[] read = new byte[content.length - start];
+        int at = 0;
+        int first = in.read();
+        Assert.isTrue("offset stream has data", first >= 0);
+        read[at++] = (byte) first;
+        Assert.equal("document stream starts at the requested byte", start,
+                ((Long) source.offsets.elementAt(0)).longValue());
+        while (at < read.length)
+        {
+            int count = in.read(read, at, Math.min(5000, read.length - at));
+            if (count < 0) { break; }
+            at += count;
+        }
+        Assert.equal("offset stream length", read.length, at);
+        Assert.equal("offset stream bytesRead", read.length, in.bytesRead());
+        byte[] expected = new byte[read.length];
+        System.arraycopy(content, start, expected, 0, expected.length);
+        Assert.bytesEqual("offset stream bytes", expected, read);
         in.close();
     }
 

@@ -91,7 +91,7 @@ $ErrorActionPreference = "Stop"
 # Single source of truth for the released version. .github/workflows/build.yml
 # reads this line and refuses to publish if it disagrees with the git tag, so a
 # mistyped tag cannot ship a JAD whose MIDlet-Version is wrong.
-$AppVersion = "0.2.5"
+$AppVersion = "0.2.6"
 $AppVendor  = "resymbian"
 
 $MidletClass = @{
@@ -679,7 +679,7 @@ MIDlet-Version: $AppVersion
 MIDlet-Vendor: $AppVendor
 MIDlet-1: $MidletName,/icon.png,$MidletClass
 MIDlet-Icon: /icon.png
-MIDlet-Permissions-Opt: javax.microedition.io.Connector.socket, javax.microedition.io.Connector.http, javax.microedition.io.Connector.file.read, javax.microedition.io.Connector.file.write
+MIDlet-Permissions-Opt: javax.microedition.io.Connector.socket, javax.microedition.io.Connector.server, javax.microedition.io.Connector.http, javax.microedition.io.Connector.file.read, javax.microedition.io.Connector.file.write
 MicroEdition-Profile: MIDP-2.0
 MicroEdition-Configuration: CLDC-1.1
 "@ -replace "`r`n", "`n" | Set-Content -Path $manifest -Encoding ASCII -NoNewline
@@ -720,7 +720,7 @@ MIDlet-Version: $AppVersion
 MIDlet-Vendor: $AppVendor
 MIDlet-1: $MidletName,/icon.png,$MidletClass
 MIDlet-Icon: /icon.png
-MIDlet-Permissions-Opt: javax.microedition.io.Connector.socket, javax.microedition.io.Connector.http, javax.microedition.io.Connector.file.read, javax.microedition.io.Connector.file.write
+MIDlet-Permissions-Opt: javax.microedition.io.Connector.socket, javax.microedition.io.Connector.server, javax.microedition.io.Connector.http, javax.microedition.io.Connector.file.read, javax.microedition.io.Connector.file.write
 MicroEdition-Profile: MIDP-2.0
 MicroEdition-Configuration: CLDC-1.1
 MIDlet-Jar-URL: $ArtifactName.jar

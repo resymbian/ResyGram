@@ -70,6 +70,63 @@ public final class FileStore
         return "file:///C/ResyGram/";
     }
 
+    /**
+     * Private folder for temporary videos. Downloads no longer land beside the
+     * user's own files, which lets us delete everything here on resume without
+     * ever guessing which clip is ours.
+     */
+    public static String videosDir()
+    {
+        String card = property("fileconn.dir.memorycard");
+        if (card != null && card.length() > 0)
+        {
+            if (!card.endsWith("/")) { card += "/"; }
+            return card + "ResyGram/Videos/";
+        }
+        return "file:///C/ResyGram/Videos/";
+    }
+
+    /** Remove the previous video handoff. Safe to call after every resume. */
+    public static void cleanupVideos()
+    {
+        FileConnection dir = null;
+        try
+        {
+            dir = (FileConnection) Connector.open(videosDir(),
+                    Connector.READ_WRITE);
+            if (!dir.exists()) { return; }
+            java.util.Enumeration names = dir.list();
+            while (names != null && names.hasMoreElements())
+            {
+                String name = (String) names.nextElement();
+                if (name == null || name.length() == 0) { continue; }
+                FileConnection file = null;
+                try
+                {
+                    file = (FileConnection) Connector.open(
+                            videosDir() + name, Connector.READ_WRITE);
+                    if (file.exists() && !file.isDirectory()) { file.delete(); }
+                }
+                catch (Throwable ignored) { }
+                finally
+                {
+                    if (file != null)
+                    {
+                        try { file.close(); } catch (Throwable ignored) { }
+                    }
+                }
+            }
+        }
+        catch (Throwable ignored) { }
+        finally
+        {
+            if (dir != null)
+            {
+                try { dir.close(); } catch (Throwable ignored) { }
+            }
+        }
+    }
+
     /** The folders worth browsing first, labelled the way the phone labels them. */
     public static String[] roots()
     {

@@ -3021,12 +3021,23 @@ public final class Telegram
                                          DownloadToken token)
             throws IOException
     {
+        return openDocument(document, 0, token);
+    }
+
+    /**
+     * Open a document at an offset, so a media player can seek without this
+     * client first storing the whole file.
+     */
+    public PhotoInputStream openDocument(DocumentRef document, long offset,
+                                         DownloadToken token)
+            throws IOException
+    {
         if (document == null || !document.downloadable())
         {
             throw new IOException("message has no downloadable file");
         }
         return new PhotoInputStream(openMediaSource(document.dcId, true),
-                document, token);
+                document, offset, token);
     }
 
     /** Progress of an upload, in bytes already acknowledged by the server. */

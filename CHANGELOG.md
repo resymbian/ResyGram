@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.6
+
+### Changed
+
+- Videos are no longer kept on the device. Small clips download into a private
+  `ResyGram/Videos` folder and are removed when the client returns from the
+  phone's viewer; clips over 6 MB are streamed from `upload.getFile` through a
+  loopback HTTP server, so no copy is written at all. When Telegram offers
+  several video formats, the smallest phone-playable one is used.
+- The JADs now also request `javax.microedition.io.Connector.server`, needed by
+  the loopback stream.
+
 ## 0.2.5
 
 ### Added

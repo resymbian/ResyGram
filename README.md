@@ -42,9 +42,11 @@ would keep open:
 - [x] Telegram-style chat bubbles, and the conversation in full screen with its
       own two-key bar: the right key composes, the left opens the drawn menu that
       replaces the AMS's command list
-- [x] Attachments: a document or video under the focus downloads to the phone's
-      downloads folder in 32 KiB chunks and is handed to the phone's own viewer
-      with `platformRequest`; photos keep the in-app viewer and zoom
+- [x] Attachments: documents download to the phone's downloads folder in 32 KiB
+      chunks and are handed to the phone's viewer with `platformRequest`; small
+      videos use a private folder that is emptied on resume, and large videos
+      stream from `upload.getFile` over loopback HTTP so nothing is saved;
+      photos keep the in-app viewer and zoom
 - [x] Search and join channels, groups and people: `contacts.search`, opening a
       result you are not in, and Join on its chat info
 - [x] Upload photos and files from the phone: a folder browser over JSR-75, then

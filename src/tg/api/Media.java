@@ -43,25 +43,26 @@ public final class Media
         if (obj.id == Api.MESSAGE_MEDIA_DOCUMENT)
         {
             TlObj document = documentField(obj);
+            TlObj[] alternatives = vecField(obj,
+                    Api.F_MESSAGE_MEDIA_DOCUMENT__ALT_DOCUMENTS);
             if (obj.num(Api.F_MESSAGE_MEDIA_DOCUMENT__VOICE) != 0)
             {
-                return documentMedia(VOICE, "[voice]", document);
+                return documentMedia(VOICE, "[voice]", document, alternatives);
             }
             if (obj.num(Api.F_MESSAGE_MEDIA_DOCUMENT__ROUND) != 0)
             {
-                return documentMedia(ROUND_VIDEO, "[round video]", document);
+                return documentMedia(ROUND_VIDEO, "[round video]", document,
+                        alternatives);
             }
             if (obj.num(Api.F_MESSAGE_MEDIA_DOCUMENT__VIDEO) != 0)
             {
-                return documentMedia(VIDEO, "[video]", document);
+                return documentMedia(VIDEO, "[video]", document, alternatives);
             }
-            Media classified = document(document);
+            Media classified = document(document, alternatives);
             if (classified != null) { return classified; }
-            TlObj[] alternatives = obj.vec(
-                    Api.F_MESSAGE_MEDIA_DOCUMENT__ALT_DOCUMENTS);
             for (int i = 0; i < alternatives.length; i++)
             {
-                classified = document(alternatives[i]);
+                classified = document(alternatives[i], alternatives);
                 if (classified != null) { return classified; }
             }
             Media file = simple(FILE, "[file]");
@@ -102,6 +103,16 @@ public final class Media
         return out;
     }
 
+    /** Short wire fixtures may stop before alt_documents; treat that as empty. */
+    private static TlObj[] vecField(TlObj obj, int field)
+    {
+        if (obj == null || obj.refs == null || field >= obj.refs.length)
+        {
+            return new TlObj[0];
+        }
+        return obj.vec(field);
+    }
+
     /** Tolerates the short fixtures used by wire tests and partial TL objects. */
     private static TlObj documentField(TlObj media)
     {
@@ -116,22 +127,65 @@ public final class Media
      * here made the tap handler think the message had no media at all, so the
      * only thing a video tap could do was open the reaction palette.
      */
-    private static Media documentMedia(int kind, String label, TlObj document)
+    private static Media documentMedia(int kind, String label, TlObj document,
+                                       TlObj[] alternatives)
     {
         Media out = simple(kind, label);
-        out.document = DocumentRef.from(document);
+        DocumentRef main = DocumentRef.from(document);
+        out.document = (kind == VIDEO || kind == ROUND_VIDEO)
+                ? smallestVideo(main, alternatives) : main;
         return out;
     }
 
-    private static Media document(TlObj document)
+    private static Media document(TlObj document, TlObj[] alternatives)
     {
         if (document == null || document.id != Api.DOCUMENT) { return null; }
         Media out = classify(document);
         // Every classified document keeps its reference: a voice note, a video
         // and a plain file all download through upload.getFile, and the UI can
         // offer the same Open command for each of them.
-        if (out != null) { out.document = DocumentRef.from(document); }
+        if (out != null)
+        {
+            out.document = (out.kind == VIDEO || out.kind == ROUND_VIDEO)
+                    ? smallestVideo(DocumentRef.from(document), alternatives)
+                    : DocumentRef.from(document);
+        }
         return out;
+    }
+
+    /**
+     * Telegram sometimes ships the same video in several formats. Pick the
+     * smallest playable MP4/3GP variant: on an old handset that is the only
+     * "low quality" control the wire format actually gives us.
+     */
+    private static DocumentRef smallestVideo(DocumentRef main,
+                                             TlObj[] alternatives)
+    {
+        DocumentRef best = main;
+        if (alternatives == null) { return best; }
+        for (int i = 0; i < alternatives.length; i++)
+        {
+            TlObj alt = alternatives[i];
+            if (alt == null || alt.id != Api.DOCUMENT) { continue; }
+            String mime = alt.strOrEmpty(Api.F_DOCUMENT__MIME_TYPE);
+            if (!isPhoneVideo(mime)) { continue; }
+            DocumentRef candidate = DocumentRef.from(alt);
+            if (candidate == null || candidate.size <= 0) { continue; }
+            if (best == null || best.size <= 0 || candidate.size < best.size)
+            {
+                best = candidate;
+            }
+        }
+        return best;
+    }
+
+    private static boolean isPhoneVideo(String mime)
+    {
+        if (mime == null) { return false; }
+        String lower = mime.toLowerCase();
+        return lower.startsWith("video/mp4")
+                || lower.startsWith("video/3gpp")
+                || lower.startsWith("video/quicktime");
     }
 
     private static Media classify(TlObj document)

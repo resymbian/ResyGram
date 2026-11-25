@@ -81,6 +81,7 @@ public final class AllTests
             new Phase7DesignTest(),
             new TouchInputTest(),
             new PhotoStreamTest(),
+            new VideoStreamerTest(),
             new JpegDecoderTest(),
             new SelfTestTest(),
             new ReportTest(),

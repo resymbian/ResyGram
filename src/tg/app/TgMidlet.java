@@ -83,6 +83,7 @@ import tg.mt.ConnectionDiagnostics;
 import tg.mt.RpcError;
 import tg.plat.FileStore;
 import tg.plat.Notifier;
+import tg.plat.VideoStreamer;
 import tg.plat.MidpLinkFactory;
 import tg.plat.RmsAuthKeyStore;
 import tg.plat.RmsCheck;
@@ -149,6 +150,9 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
      * than a chat open, which decodes the emoji sheet and wraps a transcript.
      */
     private static final int TOPIC_LIST_OPEN_BYTES = 64 * 1024;
+
+    /** Above this a video is streamed over loopback instead of being stored. */
+    private static final long MAX_SAVED_VIDEO_BYTES = 6L * 1024 * 1024;
 
     /*
      * How many dialogs and messages this client fetches and holds now comes
@@ -1039,8 +1043,24 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
 
     // -------------------------------------------------------- MIDlet life
 
+    /**
+     * MIDP cannot tell us that the external player closed. Coming back to the
+     * foreground is the reliable signal: stop the loopback server and remove
+     * the temporary copy from the last video handoff.
+     */
+    private void cleanupReturnedVideo()
+    {
+        VideoStreamer.stop();
+        if (FileStore.available())
+        {
+            try { FileStore.cleanupVideos(); }
+            catch (Throwable ignored) { }
+        }
+    }
+
     protected void startApp()
     {
+        cleanupReturnedVideo();
         if (display != null)
         {
             paused = false;
@@ -1379,6 +1399,7 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
     {
         Diag.info("destroyApp");
         paused = true;
+        VideoStreamer.stop();
         // First: the pressure hook is a static and would otherwise hold this
         // MIDlet, and everything it references, alive past teardown.
         MemoryPressure.setRelief(null);
@@ -12403,10 +12424,9 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
     /**
      * Download the document under the focus and hand it to the phone's viewer.
      *
-     * The phone, not this MIDlet, decides what can display a PDF or a video: the
-     * file is written to the downloads folder and platformRequest() launches the
-     * associated application. What lands here is the file itself, so a failed
-     * download says so instead of opening a truncated copy.
+     * Small documents are written to a private folder and deleted when this
+     * MIDlet next comes back from the viewer. Large videos are instead served
+     * from upload.getFile over loopback HTTP, so nothing is stored at all.
      */
     private void downloadDocument(final DocumentRef document)
     {
@@ -12416,6 +12436,12 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
                     AlertType.INFO, chatScreen);
             return;
         }
+        final boolean video = isVideoDocument(document);
+        if (video && document.size > MAX_SAVED_VIDEO_BYTES
+                && streamDocument(document))
+        {
+            return;
+        }
         if (!FileStore.available())
         {
             showAlert("This phone has no file system API, so files cannot be "
@@ -12423,7 +12449,8 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
                     AlertType.INFO, chatScreen);
             return;
         }
-        final BusyScreen busy = new BusyScreen(currentTheme(), "Downloading",
+        final BusyScreen busy = new BusyScreen(currentTheme(),
+                video ? "Downloading small video" : "Downloading",
                 document.fileName + "  " + FileStore.humanSize(
                         (int) Math.min(document.size, 0x7fffffffL)));
         busy.addCommand(cmdLog);
@@ -12443,7 +12470,8 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
                 try
                 {
                     int total = in.expectedBytes();
-                    return FileStore.save(FileStore.downloadsDir(),
+                    return FileStore.save(video ? FileStore.videosDir()
+                            : FileStore.downloadsDir(),
                             document.fileName, in, total,
                             new FileStore.Progress()
                             {
@@ -12507,6 +12535,41 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
             showRefused("Not downloaded", "Press Open media again in a moment.",
                     chatScreen);
         }
+    }
+
+    private static boolean isVideoDocument(DocumentRef document)
+    {
+        if (document == null || document.mimeType == null) { return false; }
+        return document.mimeType.startsWith("video/");
+    }
+
+    /**
+     * Hand a large video to the phone without writing it down. Returns false
+     * when the phone refused the loopback URL, leaving the caller to save the
+     * file as a fallback.
+     */
+    private boolean streamDocument(final DocumentRef document)
+    {
+        String url = VideoStreamer.start(document, telegram,
+                document.mimeType);
+        if (url == null) { return false; }
+        try
+        {
+            if (platformRequest(url))
+            {
+                // Do not destroy: the loopback server must keep serving bytes.
+                chatScreen.setStatus("Streaming video; nothing saved");
+                return true;
+            }
+        }
+        catch (Throwable refused)
+        {
+            Diag.warn("video stream handoff refused: " + shortMessage(refused));
+        }
+        VideoStreamer.stop();
+        showAlert("The phone did not open the video stream. It will be saved "
+                + "instead.", AlertType.INFO, chatScreen);
+        return false;
     }
 
     /** Hand a saved file to the phone; the viewer may replace this MIDlet. */

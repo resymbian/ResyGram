@@ -34,6 +34,7 @@ public final class PhotoInputStream extends InputStream
     private final Peer avatarPeer;
     private final AvatarRef avatar;
     private final DownloadToken token;
+    private final long startOffset;
     private byte[] chunk;
     private int chunkAt;
     private long offset;
@@ -55,6 +56,7 @@ public final class PhotoInputStream extends InputStream
         this.avatarPeer = null;
         this.avatar = null;
         this.token = token == null ? new DownloadToken() : token;
+        this.startOffset = 0;
         if (size.kind == PhotoSizeRef.CACHED)
         {
             chunk = size.bytes == null ? new byte[0] : size.bytes;
@@ -81,11 +83,22 @@ public final class PhotoInputStream extends InputStream
         this.avatarPeer = peer;
         this.avatar = avatar;
         this.token = token == null ? new DownloadToken() : token;
+        this.startOffset = 0;
     }
 
     /** A document stream: same chunking, no photo decoding assumptions. */
     public PhotoInputStream(Source source, DocumentRef document,
                             DownloadToken token)
+    {
+        this(source, document, 0, token);
+    }
+
+    /**
+     * A document stream starting at an offset. The local HTTP streamer uses
+     * this to answer a Range request without caching the whole file.
+     */
+    public PhotoInputStream(Source source, DocumentRef document,
+                            long startOffset, DownloadToken token)
     {
         this.source = source;
         this.photo = null;
@@ -94,13 +107,22 @@ public final class PhotoInputStream extends InputStream
         this.avatarPeer = null;
         this.avatar = null;
         this.token = token == null ? new DownloadToken() : token;
+        this.startOffset = startOffset < 0 ? 0 : startOffset;
+        offset = this.startOffset;
     }
 
-    public int bytesRead() { return (int) (offset - availableInChunk()); }
+    public int bytesRead()
+    {
+        return (int) (offset - startOffset - availableInChunk());
+    }
 
     public int expectedBytes()
     {
-        if (document != null) { return (int) Math.min(document.size, 0x7fffffffL); }
+        if (document != null)
+        {
+            long left = Math.max(0, document.size - startOffset);
+            return (int) Math.min(left, 0x7fffffffL);
+        }
         return size == null ? 0 : size.size;
     }
 
@@ -182,7 +204,7 @@ public final class PhotoInputStream extends InputStream
                 && offset >= size.size)
                 || (document != null && document.size > 0
                     && offset >= document.size);
-        token.progress((int) offset, expectedBytes());
+        token.progress((int) (offset - startOffset), expectedBytes());
     }
 
     private int availableInChunk()
