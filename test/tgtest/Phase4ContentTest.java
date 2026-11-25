@@ -81,6 +81,18 @@ public final class Phase4ContentTest implements Test
                 Api.F_MESSAGE_MEDIA_DOCUMENT__VOICE + 1);
         video.nums[Api.F_MESSAGE_MEDIA_DOCUMENT__VIDEO] = 1;
         Assert.equal("video label", "[video]", Media.from(video).label);
+        TlObj videoDocument = obj(Api.DOCUMENT,
+                Api.F_DOCUMENT__ATTRIBUTES + 1);
+        videoDocument.nums[Api.F_DOCUMENT__ID] = 42;
+        videoDocument.nums[Api.F_DOCUMENT__SIZE] = 1024;
+        videoDocument.refs[Api.F_DOCUMENT__MIME_TYPE] = "video/mp4";
+        TlObj flaggedVideo = obj(Api.MESSAGE_MEDIA_DOCUMENT,
+                Api.F_MESSAGE_MEDIA_DOCUMENT__DOCUMENT + 1);
+        flaggedVideo.nums[Api.F_MESSAGE_MEDIA_DOCUMENT__VIDEO] = 1;
+        flaggedVideo.refs[Api.F_MESSAGE_MEDIA_DOCUMENT__DOCUMENT] = videoDocument;
+        Media flagged = Media.from(flaggedVideo);
+        Assert.isTrue("flagged video keeps its document reference",
+                flagged.document != null && flagged.document.id == 42);
         TlObj round = obj(Api.MESSAGE_MEDIA_DOCUMENT,
                 Api.F_MESSAGE_MEDIA_DOCUMENT__VOICE + 1);
         round.nums[Api.F_MESSAGE_MEDIA_DOCUMENT__ROUND] = 1;
@@ -108,7 +120,7 @@ public final class Phase4ContentTest implements Test
         Assert.equal("audio label", "[audio]", Media.from(media).label);
         document.refs[Api.F_DOCUMENT__ATTRIBUTES] = new TlObj[0];
         document.refs[Api.F_DOCUMENT__MIME_TYPE] = "application/pdf";
-        Assert.equal("file label", "[file]", Media.from(media).label);
+        Assert.equal("file label", "[document.pdf]", Media.from(media).label);
 
         TlObj videoAttribute = obj(Api.DOCUMENT_ATTRIBUTE_VIDEO,
                 Api.F_DOCUMENT_ATTRIBUTE_VIDEO__ROUND_MESSAGE + 1);
@@ -181,11 +193,19 @@ public final class Phase4ContentTest implements Test
                 EmojiText.fallbackFor(0x1f525));
         Assert.isTrue("melting face has a sprite",
                 EmojiText.hasSprite(0x1fae0));
+        Assert.isTrue("newer single has an extended sprite",
+                EmojiText.hasSprite(0x1fae8));
         Assert.equal("unknown emoji fallback", "[emoji]",
                 EmojiText.fallbackFor(0x1fae8));
         String family = "\ud83d\udc69\u200d\ud83d\udcbb";
         Assert.equal("ZWJ is one renderer token", family.length(),
                 EmojiText.nextBoundary(family, 0));
+        String flag = "\ud83c\uddfa\ud83c\uddf8";
+        Assert.equal("flag is one renderer token", flag.length(),
+                EmojiText.nextBoundary(flag, 0));
+        String keycap = "#\ufe0f\u20e3";
+        Assert.equal("keycap is one renderer token", keycap.length(),
+                EmojiText.nextBoundary(keycap, 0));
     }
 
     private void reactionParsing()

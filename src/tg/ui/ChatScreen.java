@@ -48,6 +48,12 @@ public class ChatScreen extends Canvas
         void onMessageActivated(int messageId);
     }
 
+    /** Told when a short tap lands on an actionable message entity. */
+    public interface LinkListener
+    {
+        void onLinkActivated(int messageId, MessageEntity entity);
+    }
+
     /**
      * Told whenever the viewport moves, so somebody else can decide whether
      * more history is needed. Deliberately carries nothing: the listener asks
@@ -154,6 +160,7 @@ public class ChatScreen extends Canvas
     private int[] revealedSpoilerIds = new int[0];
     private int revealedSpoilerCount;
     private ActivationListener activationListener;
+    private LinkListener linkListener;
     private ViewportListener viewportListener;
     private final TouchGesture touch = new TouchGesture();
     private TouchContextListener touchContextListener;
@@ -295,6 +302,11 @@ public class ChatScreen extends Canvas
     public void setActivationListener(ActivationListener value)
     {
         activationListener = value;
+    }
+
+    public void setLinkListener(LinkListener value)
+    {
+        linkListener = value;
     }
 
     public void setViewportListener(ViewportListener value)
@@ -1295,7 +1307,10 @@ public class ChatScreen extends Canvas
             TouchContextListener listener = touchContextListener;
             if (listener != null) { listener.onTouchContextRequested(this); }
         }
-        else { activateFocused(); }
+        else if (!activateLinkAt(x, y))
+        {
+            activateFocused();
+        }
     }
 
     private void settleTouchScroll()
@@ -1316,6 +1331,42 @@ public class ChatScreen extends Canvas
         {
             listener.onMessageActivated(focusedMessageId);
         }
+    }
+
+    /**
+     * A short tap on a URL, email, phone or mention goes straight to that
+     * entity. The same confirmation path as the menu's Actions entry is used by
+     * the listener, so a text_url cannot silently send the browser elsewhere.
+     */
+    private boolean activateLinkAt(int x, int y)
+    {
+        LinkListener listener = linkListener;
+        if (listener == null || y < metrics.bodyTop || y >= metrics.bodyBottom)
+        {
+            return false;
+        }
+        updateMetrics();
+        int line = scroll.top() + (y - metrics.bodyTop) / lineHeight;
+        if (line < 0 || line >= lineMessageIds.length) { return false; }
+        int id = lineMessageIds[line];
+        int start = lineTextStarts[line];
+        String shown = lines[line];
+        if (id == 0 || start < 0 || shown == null) { return false; }
+        Message message = messageById(id);
+        if (message == null || message.entities == null
+                || message.entities.length == 0) { return false; }
+
+        int textX = bubbles ? bubbleLeft(id, line) + bubbleInset()
+                : metrics.padding;
+        if (richText.quotedAt(message.entities, start)) { textX += 6; }
+        MessageEntity entity = richText.entityAt(message.text, start,
+                start + shown.length(), message.entities, x - textX,
+                isSpoilerRevealed(id));
+        if (entity == null) { return false; }
+        focusedMessageId = id;
+        listener.onLinkActivated(id, entity);
+        repaint();
+        return true;
     }
 
     private boolean focusAt(int y)

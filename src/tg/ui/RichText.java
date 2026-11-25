@@ -69,6 +69,46 @@ public final class RichText
     }
 
     /**
+     * Actionable entity under a horizontal offset inside {@code [start,end)}.
+     *
+     * The walk is the same one {@link #width} and {@link #fitEnd} use, so a hit
+     * test agrees with what was painted even when a line mixes bold, emoji and
+     * underlined links. A concealed spoiler never yields an entity.
+     */
+    public MessageEntity entityAt(String text, int start, int end,
+                                  MessageEntity[] entities, int xOffset,
+                                  boolean spoilersRevealed)
+    {
+        if (entities == null || xOffset < 0 || text == null) { return null; }
+        int at = start;
+        int x = 0;
+        while (at < end)
+        {
+            int next = Math.min(end, EmojiText.nextBoundary(text, at));
+            int width = EmojiText.substringWidth(text, at, next - at,
+                    font(flagsAt(entities, at)));
+            if (xOffset >= x && xOffset < x + width)
+            {
+                if (!spoilersRevealed
+                        && MessageEntity.overlapsSpoiler(entities, at, next - at))
+                {
+                    return null;
+                }
+                for (int i = 0; i < entities.length; i++)
+                {
+                    MessageEntity entity = entities[i];
+                    if (entity != null && entity.actionable()
+                            && entity.overlaps(at, next)) { return entity; }
+                }
+                return null;
+            }
+            x += width;
+            at = next;
+        }
+        return null;
+    }
+
+    /**
      * Keep a blockquote on its own visual lines, including malformed input
      * where Telegram did not align the entity to newline boundaries.
      */

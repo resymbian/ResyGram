@@ -1,0 +1,230 @@
+# Selected Unicode Emoji 16.0 source entries for the ResyGram extended atlas.
+# Derived from https://unicode.org/Public/emoji/16.0/emoji-test.txt
+# S = extra single code point; Q = sequence rendered as one sprite.
+# The core 176-glyph list lives in tools/generate-emoji.py. Duplicates against
+# that list are skipped by the generator.
+
+S 1F642 # E1.0 slightly smiling face
+S 1FAF1 # E14.0 rightwards hand
+S 1F435 # E0.6 monkey face
+S 1F347 # E0.6 grapes
+S 1F30D # E0.7 globe showing Europe-Africa
+S 1F383 # E0.6 jack-o-lantern
+S 1F453 # E0.6 glasses
+S 1F3E7 # E0.6 ATM sign
+S 1F3C1 # E0.6 chequered flag
+S 1F643 # E1.0 upside-down face
+S 1FAF2 # E14.0 leftwards hand
+S 1F412 # E0.6 monkey
+S 1F348 # E0.6 melon
+S 1F30E # E0.7 globe showing Americas
+S 1F384 # E0.6 Christmas tree
+S 1F97D # E11.0 goggles
+S 1F6AE # E1.0 litter in bin sign
+S 1F6A9 # E0.6 triangular flag
+S 1F617 # E1.0 kissing face
+S 1FAF3 # E14.0 palm down hand
+S 1F98D # E3.0 gorilla
+S 1F349 # E0.6 watermelon
+S 1F30F # E0.6 globe showing Asia-Australia
+S 1F386 # E0.6 fireworks
+S 1F97C # E11.0 lab coat
+S 1F6B0 # E1.0 potable water
+S 1F38C # E0.6 crossed flags
+S 1F61A # E0.6 kissing face with closed eyes
+S 1FAF4 # E14.0 palm up hand
+S 1F9A7 # E12.0 orangutan
+S 1F34A # E0.6 tangerine
+S 1F310 # E1.0 globe with meridians
+S 1F387 # E0.6 sparkler
+S 1F9BA # E12.0 safety vest
+S 267F # E0.6 wheelchair symbol
+S 1F3F4 # E1.0 black flag
+S 1F619 # E1.0 kissing face with smiling eyes
+S 1FAF7 # E15.0 leftwards pushing hand
+S 1F436 # E0.6 dog face
+S 1F34B # E1.0 lemon
+S 1F5FE # E0.6 map of Japan
+S 1F9E8 # E11.0 firecracker
+S 1F454 # E0.6 necktie
+S 1F6B9 # E0.6 men's room
+S 1F61B # E1.0 face with tongue
+S 1FAF8 # E15.0 rightwards pushing hand
+S 1F415 # E0.7 dog
+S 1F34C # E0.6 banana
+S 1F9ED # E11.0 compass
+S 1F388 # E0.6 balloon
+S 1F455 # E0.6 t-shirt
+S 1F6BA # E0.6 women's room
+S 1F61C # E0.6 winking face with tongue
+S 1F595 # E1.0 middle finger
+S 1F9AE # E12.0 guide dog
+S 1F34D # E0.6 pineapple
+S 1F30B # E0.6 volcano
+S 1F38A # E0.6 confetti ball
+S 1F456 # E0.6 jeans
+S 1F6BB # E0.6 restroom
+S 1F92A # E5.0 zany face
+S 1F9BE # E12.0 mechanical arm
+S 1F429 # E0.6 poodle
+S 1F96D # E11.0 mango
+S 1F5FB # E0.6 mount fuji
+S 1F38B # E0.6 tanabata tree
+S 1F9E3 # E5.0 scarf
+S 1F6BC # E0.6 baby symbol
+S 1F61D # E0.6 squinting face with tongue
+S 1F9BF # E12.0 mechanical leg
+S 1F43A # E0.6 wolf
+S 1F34E # E0.6 red apple
+S 1F9F1 # E11.0 brick
+S 1F38D # E0.6 pine decoration
+S 1F9E4 # E5.0 gloves
+S 1F6BE # E0.6 water closet
+S 1F911 # E1.0 money-mouth face
+S 1F9B5 # E11.0 leg
+S 1F99D # E11.0 raccoon
+S 1F34F # E0.6 green apple
+S 1FAA8 # E13.0 rock
+S 1F38E # E0.6 Japanese dolls
+S 1F9E5 # E5.0 coat
+S 1F6C2 # E1.0 passport control
+S 1F92B # E5.0 shushing face
+S 1F9B6 # E11.0 foot
+S 1F431 # E0.6 cat face
+S 1F350 # E1.0 pear
+S 1FAB5 # E13.0 wood
+S 1F38F # E0.6 carp streamer
+S 1F9E6 # E5.0 socks
+S 1F6C3 # E1.0 customs
+S 1F910 # E1.0 zipper-mouth face
+S 1F9BB # E12.0 ear with hearing aid
+S 1F408 # E0.7 cat
+S 1F351 # E0.6 peach
+S 1F6D6 # E13.0 hut
+S 1F390 # E0.6 wind chime
+S 1F457 # E0.6 dress
+S 1F6C4 # E1.0 baggage claim
+S 1F611 # E1.0 expressionless face
+S 1F9B7 # E11.0 tooth
+S 1F981 # E1.0 lion
+S 1F352 # E0.6 cherries
+S 1F3E0 # E0.6 house
+S 1F391 # E0.6 moon viewing ceremony
+S 1F458 # E0.6 kimono
+S 1F6C5 # E1.0 left luggage
+S 1F636 # E1.0 face without mouth
+S 1F9B4 # E11.0 bone
+S 1F42F # E0.6 tiger face
+S 1F353 # E0.6 strawberry
+S 1F3E1 # E0.6 house with garden
+S 1F9E7 # E11.0 red envelope
+S 1F97B # E12.0 sari
+S 1F6B8 # E1.0 children crossing
+S 1FAE5 # E14.0 dotted line face
+S 1F445 # E0.6 tongue
+S 1F405 # E1.0 tiger
+S 1FAD0 # E13.0 blueberries
+S 1F3E2 # E0.6 office building
+S 1F380 # E0.6 ribbon
+S 1FA71 # E12.0 one-piece swimsuit
+S 26D4 # E0.6 no entry
+S 1F612 # E0.6 unamused face
+S 1F444 # E0.6 mouth
+S 1F406 # E1.0 leopard
+S 1F95D # E3.0 kiwi fruit
+S 1F3E3 # E0.6 Japanese post office
+S 1F3AB # E0.6 ticket
+S 1FA72 # E12.0 briefs
+S 1F6AB # E0.6 prohibited
+S 1F925 # E3.0 lying face
+S 1FAE6 # E14.0 biting lip
+S 1F434 # E0.6 horse face
+S 1F345 # E0.6 tomato
+S 1F3E4 # E1.0 post office
+S 1F3C5 # E1.0 sports medal
+S 1FA73 # E12.0 shorts
+S 1F6B3 # E1.0 no bicycles
+S 1FAE8 # E15.0 shaking face
+S 1FAE9 # E16.0 face with bags under eyes
+S 1FAE4 # E14.0 face with diagonal mouth
+S 1FA77 # E15.0 pink heart
+S 1FA75 # E15.0 light blue heart
+S 1FA76 # E15.0 grey heart
+S 1FA79 # E12.0 adhesive bandage
+S 1FA7A # E12.0 stethoscope
+S 1F471 # E0.6 person: blond hair
+S 1FACE # E15.0 moose
+S 1F90D # E12.0 white heart
+
+Q 1F1FA 1F1F8 # E0.6 flag: United States
+Q 1F1EC 1F1E7 # E0.6 flag: United Kingdom
+Q 1F1EA 1F1F8 # E0.6 flag: Spain
+Q 1F1E9 1F1EA # E0.6 flag: Germany
+Q 1F1EB 1F1F7 # E0.6 flag: France
+Q 1F1EE 1F1F9 # E0.6 flag: Italy
+Q 1F1F5 1F1F9 # E2.0 flag: Portugal
+Q 1F1F2 1F1FD # E2.0 flag: Mexico
+Q 1F1E7 1F1F7 # E2.0 flag: Brazil
+Q 1F1E6 1F1F7 # E2.0 flag: Argentina
+Q 1F1E8 1F1F4 # E2.0 flag: Colombia
+Q 1F1E8 1F1F1 # E2.0 flag: Chile
+Q 1F1F5 1F1EA # E2.0 flag: Peru
+Q 1F1FB 1F1EA # E2.0 flag: Venezuela
+Q 1F1E8 1F1E6 # E2.0 flag: Canada
+Q 1F1E6 1F1FA # E2.0 flag: Australia
+Q 1F1F3 1F1FF # E2.0 flag: New Zealand
+Q 1F1EF 1F1F5 # E0.6 flag: Japan
+Q 1F1F0 1F1F7 # E0.6 flag: South Korea
+Q 1F1E8 1F1F3 # E0.6 flag: China
+Q 1F1F7 1F1FA # E0.6 flag: Russia
+Q 1F1FA 1F1E6 # E2.0 flag: Ukraine
+Q 1F1EE 1F1F3 # E2.0 flag: India
+Q 1F1EE 1F1F1 # E2.0 flag: Israel
+Q 0023 FE0F 20E3 # E0.6 keycap: #
+Q 002A FE0F 20E3 # E2.0 keycap: *
+Q 0030 FE0F 20E3 # E0.6 keycap: 0
+Q 0031 FE0F 20E3 # E0.6 keycap: 1
+Q 0032 FE0F 20E3 # E0.6 keycap: 2
+Q 0033 FE0F 20E3 # E0.6 keycap: 3
+Q 0034 FE0F 20E3 # E0.6 keycap: 4
+Q 0035 FE0F 20E3 # E0.6 keycap: 5
+Q 0036 FE0F 20E3 # E0.6 keycap: 6
+Q 0037 FE0F 20E3 # E0.6 keycap: 7
+Q 0038 FE0F 20E3 # E0.6 keycap: 8
+Q 0039 FE0F 20E3 # E0.6 keycap: 9
+Q 2764 FE0F 200D 1F525 # E13.1 heart on fire
+Q 2764 FE0F 200D 1FA79 # E13.1 mending heart
+Q 1F441 FE0F 200D 1F5E8 FE0F # E1.0 eye in speech bubble
+Q 1F636 200D 1F32B FE0F # E12.0 face in clouds
+Q 1F62E 200D 1F4A8 # E13.0 face exhaling
+Q 1F642 200D 2194 FE0F # E14.0 head shaking horizontally
+Q 1F469 200D 1F4BB # E4.0 woman technologist
+Q 1F9D1 200D 2695 FE0F # E12.1 health worker
+Q 1F9D1 200D 1F393 # E12.1 student
+Q 1F9D1 200D 1F3EB # E12.1 teacher
+Q 1F9D1 200D 1F33E # E12.1 farmer
+Q 1F9D1 200D 1F373 # E12.1 cook
+Q 1F9D1 200D 1F527 # E12.1 mechanic
+Q 1F9D1 200D 1F3ED # E12.1 factory worker
+Q 1F9D1 200D 1F4BC # E12.1 office worker
+Q 1F9D1 200D 1F52C # E12.1 scientist
+Q 1F9D1 200D 1F4BB # E12.1 technologist
+Q 1F9D1 200D 1F3A4 # E12.1 singer
+Q 1F9D1 200D 1F3A8 # E12.1 artist
+Q 1F9D1 200D 2708 FE0F # E12.1 pilot
+Q 1F9D1 200D 1F680 # E12.1 astronaut
+Q 1F9D1 200D 1F692 # E12.1 firefighter
+Q 1F9D1 200D 1F91D 200D 1F9D1 # E12.0 people holding hands
+Q 1F469 200D 2764 FE0F 200D 1F48B 200D 1F469 # E2.0 kiss: woman, woman
+Q 1F469 200D 2764 FE0F 200D 1F469 # E2.0 couple with heart: woman, woman
+Q 1F468 200D 1F469 200D 1F467 # E2.0 family: man, woman, girl
+Q 1F469 200D 1F469 200D 1F467 # E2.0 family: woman, woman, girl
+Q 1F415 200D 1F9BA # E13.0 service dog
+Q 1F426 200D 1F525 # E13.0 phoenix
+Q 263A FE0F # E0.6 smiling face (text variant)
+Q 1F44D 1F3FB # E1.0 thumbs up: light skin tone
+Q 1F44D 1F3FF # E1.0 thumbs up: dark skin tone
+Q 1F590 1F3FD # E1.0 hand with fingers splayed: medium skin tone
+Q 1F64F 1F3FC # E1.0 folded hands: medium-light skin tone
+Q 1F6B6 1F3FE # E1.0 person walking: medium-dark skin tone
+Q 1F469 1F3FD 200D 1F4BC # E4.0 woman office worker: medium skin tone

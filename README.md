@@ -51,9 +51,10 @@ would keep open:
       `upload.saveFilePart` in 32 KiB chunks (`saveBigFilePart` above 10 MB) and
       `messages.sendMedia`, with the byte count on the progress bar
 - [x] Background delivery with a native note and an Inbox entry, through the
-      loopback bridge (`socket://127.0.0.1:4711`) shared with Discofi and
-      maintained as [NotiHelper]; off in Settings, and Test notification in the
-      Settings and chat list menus proves the bridge is installed
+      local-only bridge (`socket://127.0.0.1:4711`, with an IAP-local
+      `localhost` fallback) shared with Discofi and maintained as [NotiHelper];
+      off in Settings, and Test notification in the Settings and chat list menus
+      proves the bridge is installed
 - [x] A loading bar, not a dot ring: the splash and every blocking step
       (connect, sign-in, sending) sweep a progress bar so the wait reads as a
       process. The busy screen starts on `showNotify` and stops on `hideNotify`,
@@ -98,10 +99,11 @@ failing silently.
 System notes need the companion native bridge, **[NotiHelper]** - a separate
 project, since this client and Discofi share it. Install
 `NotiHelper.sisx` from its [latest release][NotiHelper] (Open4All and the
-installserver patch required) and launch it once per boot. It listens on
-loopback only, shows an Avkon global note, writes the same text as an unread
-entry in Messaging's Inbox, and answers one byte. With it absent,
-notifications are silently skipped - the client never depends on it.
+installserver patch required) and launch it once per boot. It listens on the
+local device only, shows an Avkon global note, writes the same text as an unread
+entry in Messaging's Inbox, and answers one byte. It accepts only local peers
+(IPv4 loopback or the phone's own IAP address). With it absent, notifications
+are silently skipped - the client never depends on it.
 
 [NotiHelper]: https://github.com/resymbian/NotiHelper
 

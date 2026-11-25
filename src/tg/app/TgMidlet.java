@@ -7385,6 +7385,17 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
                 else { showReactionPalette(messageId); }
             }
         });
+        screen.setLinkListener(new ChatScreen.LinkListener()
+        {
+            public void onLinkActivated(int messageId, MessageEntity entity)
+            {
+                Message message = findOpenMessage(messageId);
+                if (message == null) { return; }
+                entityMessage = message;
+                openEntityTarget(ExternalAction.target(entity, message.text),
+                        screen);
+            }
+        });
         screen.setViewportListener(new ChatScreen.ViewportListener()
         {
             public void onChatViewportChanged()
@@ -9548,8 +9559,18 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
         if (entityList == null || entityMessage == null) { return; }
         int index = entityList.getSelectedIndex();
         if (index < 0 || index >= entityItems.length) { return; }
-        final ExternalAction.Target target = ExternalAction.target(
-                entityItems[index], entityMessage.text);
+        openEntityTarget(ExternalAction.target(
+                entityItems[index], entityMessage.text), entityList);
+    }
+
+    /**
+     * Shared by the Actions menu and a direct tap on underlined message text.
+     * External targets always go through the same visible confirmation; user
+     * targets go through the same resolving worker.
+     */
+    private void openEntityTarget(final ExternalAction.Target target,
+                                  final Displayable back)
+    {
         if (target == null) { return; }
         if (target.kind == ExternalAction.EXTERNAL)
         {
@@ -9610,13 +9631,12 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
                     dropStale("resolve message entity");
                     return;
                 }
-                showAlertThen("Cannot open user", error, entityList);
+                showAlertThen("Cannot open user", error, back);
             }
         });
         if (!submitted)
         {
-            showRefused("User not opened", "Try Select again in a moment.",
-                    entityList);
+            showRefused("User not opened", "Try Select again in a moment.", back);
         }
     }
 

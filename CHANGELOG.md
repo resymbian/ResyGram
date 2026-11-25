@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.2.5
+
+### Added
+
+- An extended emoji sheet is loaded only when a message needs it. Flags,
+  keycaps, ZWJ families and skin-tone variants are drawn as whole-sequence
+  sprites, so wrapping can no longer split one emoji across lines. The core
+  sheet still covers reactions and the picker, and plain text still decodes no
+  PNG at all.
+
+### Fixed
+
+- Notifications try `127.0.0.1` and then the IAP-local `localhost` route, so an
+  S60 stack that resolves loopback through its selected IAP can reach
+  NotiHelper. Titles and texts are trimmed by encoded UTF-8 bytes to the
+  bridge's limits, and Settings reports the actual failure instead of a
+  generic "no bridge".
+- Voice notes, round videos and videos keep their `DocumentRef` instead of
+  becoming bare labels, so tapping flagged media reaches the attachment/save
+  path rather than only opening reactions.
+- A short tap on a URL, email, phone number or mention in message text now
+  follows that entity. It uses the same visible confirmation and user-resolving
+  path as the Actions menu, including spoiler concealment.
+
 ## 0.2.4
 
 ### Changed

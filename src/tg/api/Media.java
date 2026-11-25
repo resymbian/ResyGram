@@ -42,19 +42,19 @@ public final class Media
         }
         if (obj.id == Api.MESSAGE_MEDIA_DOCUMENT)
         {
+            TlObj document = documentField(obj);
             if (obj.num(Api.F_MESSAGE_MEDIA_DOCUMENT__VOICE) != 0)
             {
-                return simple(VOICE, "[voice]");
+                return documentMedia(VOICE, "[voice]", document);
             }
             if (obj.num(Api.F_MESSAGE_MEDIA_DOCUMENT__ROUND) != 0)
             {
-                return simple(ROUND_VIDEO, "[round video]");
+                return documentMedia(ROUND_VIDEO, "[round video]", document);
             }
             if (obj.num(Api.F_MESSAGE_MEDIA_DOCUMENT__VIDEO) != 0)
             {
-                return simple(VIDEO, "[video]");
+                return documentMedia(VIDEO, "[video]", document);
             }
-            TlObj document = obj.obj(Api.F_MESSAGE_MEDIA_DOCUMENT__DOCUMENT);
             Media classified = document(document);
             if (classified != null) { return classified; }
             TlObj[] alternatives = obj.vec(
@@ -99,6 +99,27 @@ public final class Media
         Media out = new Media();
         out.kind = kind;
         out.label = label;
+        return out;
+    }
+
+    /** Tolerates the short fixtures used by wire tests and partial TL objects. */
+    private static TlObj documentField(TlObj media)
+    {
+        int field = Api.F_MESSAGE_MEDIA_DOCUMENT__DOCUMENT;
+        Object[] refs = media.refs;
+        if (refs == null || field >= refs.length) { return null; }
+        return media.obj(field);
+    }
+
+    /**
+     * A flagged voice/round/video still has to keep its DocumentRef. Dropping it
+     * here made the tap handler think the message had no media at all, so the
+     * only thing a video tap could do was open the reaction palette.
+     */
+    private static Media documentMedia(int kind, String label, TlObj document)
+    {
+        Media out = simple(kind, label);
+        out.document = DocumentRef.from(document);
         return out;
     }
 

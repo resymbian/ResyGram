@@ -19,18 +19,24 @@ import javax.microedition.lcdui.Image;
  * transcript went through it twice. {@link #fitEnd} replaces that with a single
  * accumulating walk.
  *
- * The accumulation assumes a token's width does not depend on what precedes it,
- * which is true of the bitmap fonts MIDP actually ships - there is no kerning to
- * make {@code stringWidth} differ from the sum of its parts. {@code ui/emoji-wrap}
- * pins that assumption rather than leaving it as folklore.
+ * Two sprite sheets back the renderer. The core sheet holds the fixed reaction
+ * palette and the highest-frequency single code points; the extended sheet is
+ * decoded only when a message actually uses one of its extra singles or a
+ * whole-sequence sprite (flags, keycaps, ZWJ compositions, skin tones). A
+ * sequence is measured and drawn as one 16x16 token, so no wrapping boundary
+ * can split a family, a flag or a keycap.
  */
 public final class EmojiText
 {
     public static final int GLYPH = 16;
     private static Image sheet;
+    private static Image extSheet;
     private static boolean loadAttempted;
+    private static boolean extLoadAttempted;
     private static int loadFailures;
+    private static int extLoadFailures;
     private static long nextLoadAt;
+    private static long extNextLoadAt;
 
     private EmojiText() { }
 
@@ -94,25 +100,27 @@ public final class EmojiText
     public static void drawString(Graphics g, String text, int x, int y, Font font)
     {
         if (text == null) { return; }
-        // Loading is lazy: a plain text message must not decode the sheet just
-        // because the drawing code passed through here.
-        Image sprites = null;
+        // Loading is lazy: a plain text message must not decode either sheet
+        // just because the drawing code passed through here.
         int n = text.length();
         int at = 0;
         int runStart = -1;
         while (at < n)
         {
             int next = tokenEnd(text, at, n);
-            int cp = codePoint(text, at);
-            int cell = find(cp);
+            int cp = codePoint(text, at, n);
+            int packed = matchSequence(text, at, n);
+            int cell = packed >= 0 ? packed & 0xffff : find(cp);
             if (cell >= 0)
             {
-                if (sprites == null) { sprites = sprites(); }
+                Image sprites = sheetFor(cell);
                 x = flush(g, text, runStart, at, x, y, font);
                 runStart = -1;
                 if (sprites != null)
                 {
-                    g.drawRegion(sprites, (cell & 15) * GLYPH, (cell >> 4) * GLYPH,
+                    int local = cell >= EmojiData.EXT_BASE
+                            ? cell - EmojiData.EXT_BASE : cell;
+                    g.drawRegion(sprites, (local & 15) * GLYPH, (local >> 4) * GLYPH,
                             GLYPH, GLYPH, 0, x, y, Graphics.TOP | Graphics.LEFT);
                 }
                 x += GLYPH;
@@ -141,11 +149,11 @@ public final class EmojiText
         if (runStart < 0 || runEnd <= runStart) { return x; }
         g.setFont(font);
         g.drawString(text.substring(runStart, runEnd), x, y,
-                Graphics.TOP | Graphics.LEFT);
+                 Graphics.TOP | Graphics.LEFT);
         return x + substringWidth(text, runStart, runEnd - runStart, font);
     }
 
-    /** Boundary after one renderer token; never splits a surrogate/ZWJ sequence. */
+    /** Boundary after one renderer token; never splits a surrogate or sequence. */
     public static int nextBoundary(String text, int at)
     {
         if (text == null || at >= text.length()) { return at; }
@@ -170,7 +178,10 @@ public final class EmojiText
      */
     private static int tokenEnd(String text, int at, int end)
     {
-        int cp = codePoint(text, at);
+        if (at >= end) { return at; }
+        int packed = matchSequence(text, at, end);
+        if (packed >= 0) { return packed >>> 16; }
+        int cp = codePoint(text, at, end);
         int next = baseEnd(text, at, end, cp);
         // A compact client renders a ZWJ sequence as its first useful base, so
         // the whole sequence is one token. Plain text keeps its own boundary -
@@ -181,7 +192,9 @@ public final class EmojiText
     /** Width of the single token at {@code at}. */
     private static int tokenWidth(String text, int at, int end, Font font)
     {
-        int cp = codePoint(text, at);
+        int packed = matchSequence(text, at, end);
+        if (packed >= 0) { return GLYPH; }
+        int cp = codePoint(text, at, end);
         if (find(cp) >= 0) { return GLYPH; }
         if (isEmoji(cp)) { return font.stringWidth(fallback(cp)); }
         int plainEnd = baseEnd(text, at, end, cp);
@@ -193,19 +206,22 @@ public final class EmojiText
                 : font.stringWidth(text.substring(at, plainEnd));
     }
 
-    /** Base character plus its variation selector and skin-tone modifier. */
+    /** Base character plus its variation selector, tone modifier and keycap. */
     private static int baseEnd(String text, int at, int end, int cp)
     {
         int next = at + (cp > 0xffff ? 2 : 1);
+        if (next > end) { next = end; }
         if (next < end && text.charAt(next) == '\ufe0f') { next++; }
         if (next < end)
         {
-            int modifier = codePoint(text, next);
+            int modifier = codePoint(text, next, end);
             if (modifier >= 0x1f3fb && modifier <= 0x1f3ff)
             {
-                next += modifier > 0xffff ? 2 : 1;
+                next += 2;
+                if (next > end) { next = end; }
             }
         }
+        if (next < end && text.charAt(next) == '\u20e3') { next++; }
         return next;
     }
 
@@ -216,8 +232,16 @@ public final class EmojiText
         {
             sequenceEnd++;
             if (sequenceEnd >= end) { break; }
-            int joined = codePoint(text, sequenceEnd);
+            int joined = codePoint(text, sequenceEnd, end);
+            if (joined < 0) { break; }
             sequenceEnd += joined > 0xffff ? 2 : 1;
+            if (sequenceEnd > end) { sequenceEnd = end; break; }
+            int modifier = codePoint(text, sequenceEnd, end);
+            if (modifier >= 0x1f3fb && modifier <= 0x1f3ff)
+            {
+                sequenceEnd += 2;
+                if (sequenceEnd > end) { sequenceEnd = end; }
+            }
             if (sequenceEnd < end && text.charAt(sequenceEnd) == '\ufe0f')
             {
                 sequenceEnd++;
@@ -226,10 +250,63 @@ public final class EmojiText
         return sequenceEnd;
     }
 
-    private static int codePoint(String text, int at)
+    /**
+     * Longest known whole-sequence match at {@code at}.
+     *
+     * The packed result is {@code (charLength << 16) | spriteCell}, or -1.
+     * Keeping both values in one int avoids an allocation on every wrapped
+     * character of every line.
+     */
+    private static int matchSequence(String text, int at, int end)
     {
+        int cp = codePoint(text, at, end);
+        int[] first = EmojiData.SEQ_FIRST;
+        int lo = lowerBound(first, cp);
+        if (lo >= first.length || first[lo] != cp) { return -1; }
+        int bestLength = 0;
+        int bestCell = -1;
+        int i = lo;
+        while (i < first.length && first[i] == cp)
+        {
+            int[] sequence = EmojiData.SEQ_CPS[i];
+            int p = at;
+            boolean matches = true;
+            for (int j = 0; j < sequence.length; j++)
+            {
+                if (p >= end) { matches = false; break; }
+                int got = codePoint(text, p, end);
+                if (got != sequence[j]) { matches = false; break; }
+                p += got > 0xffff ? 2 : 1;
+                if (p > end) { p = end; }
+            }
+            if (matches && p - at > bestLength)
+            {
+                bestLength = p - at;
+                bestCell = EmojiData.SEQ_CELLS[i];
+            }
+            i++;
+        }
+        return bestCell < 0 ? -1 : ((bestLength << 16) | (bestCell & 0xffff));
+    }
+
+    private static int lowerBound(int[] values, int key)
+    {
+        int lo = 0;
+        int hi = values.length;
+        while (lo < hi)
+        {
+            int mid = (lo + hi) >>> 1;
+            if (values[mid] < key) { lo = mid + 1; }
+            else { hi = mid; }
+        }
+        return lo;
+    }
+
+    private static int codePoint(String text, int at, int end)
+    {
+        if (at >= end || text == null) { return -1; }
         char high = text.charAt(at);
-        if (high >= 0xd800 && high <= 0xdbff && at + 1 < text.length())
+        if (high >= 0xd800 && high <= 0xdbff && at + 1 < end)
         {
             char low = text.charAt(at + 1);
             if (low >= 0xdc00 && low <= 0xdfff)
@@ -242,13 +319,20 @@ public final class EmojiText
 
     private static int find(int cp)
     {
+        int cell = search(EmojiData.CORE_CODEPOINTS, EmojiData.CORE_CELLS, cp);
+        if (cell >= 0) { return cell; }
+        return search(EmojiData.EXT_CODEPOINTS, EmojiData.EXT_CELLS, cp);
+    }
+
+    private static int search(int[] codePoints, short[] cells, int cp)
+    {
         int lo = 0;
-        int hi = EmojiData.CODEPOINTS.length - 1;
+        int hi = codePoints.length - 1;
         while (lo <= hi)
         {
             int mid = (lo + hi) >>> 1;
-            int value = EmojiData.CODEPOINTS[mid];
-            if (value == cp) { return EmojiData.CELLS[mid]; }
+            int value = codePoints[mid];
+            if (value == cp) { return cells[mid]; }
             if (value < cp) { lo = mid + 1; }
             else { hi = mid - 1; }
         }
@@ -257,9 +341,14 @@ public final class EmojiText
 
     private static boolean isEmoji(int cp)
     {
-        return cp >= 0x1f000 || (cp >= 0x2600 && cp <= 0x27ff)
-                || cp == 0x00a9 || cp == 0x00ae || cp == 0x203c
-                || cp == 0x2049 || cp == 0x2122 || cp == 0x2139;
+        if (cp < 0) { return false; }
+        if (cp >= 0x1f300 && cp <= 0x1faff) { return true; }
+        if (cp >= 0x1f1e6 && cp <= 0x1f1ff) { return true; }
+        if (cp >= 0x2600 && cp <= 0x27bf) { return true; }
+        return cp == 0x00a9 || cp == 0x00ae || cp == 0x203c
+                || cp == 0x2049 || cp == 0x2122 || cp == 0x2139
+                || cp == 0x3030 || cp == 0x303d || cp == 0x3297
+                || cp == 0x3299;
     }
 
     private static String fallback(int cp)
@@ -281,7 +370,7 @@ public final class EmojiText
             case 0x1f44e: return "[-]";
             default:
                 // Regional indicators are flags, modifiers are skin tones.
-                // Neither has a sprite in a per-codepoint atlas, but showing
+                // Neither has a standalone sprite, but showing
                 // "[flag]"/"[tone]" is better than a generic "[emoji]".
                 if (cp >= 0x1f1e6 && cp <= 0x1f1ff) return "[flag]";
                 if (cp >= 0x1f3fb && cp <= 0x1f3ff) return "[tone]";
@@ -291,24 +380,34 @@ public final class EmojiText
     }
 
     /**
-     * Drop the decoded sprite sheet so it can be collected, and allow it to be
-     * loaded again on the next paint.
+     * Drop both decoded sprite sheets so they can be collected, and allow them
+     * to be loaded again on the next paint.
      *
-     * All four fields have to be reset. {@code loadAttempted} latches true only
-     * after a successful load, a missing asset or three failed decodes; nulling
-     * the sheet alone would leave emoji disabled for the rest of the session.
-     * The short cooldown stops a shed/reload/shed cycle from decoding the sheet
-     * again on the very next paint, which was measurable as handset heat.
+     * Every field has to be reset. The attempted flags latch true only after a
+     * successful load, a missing asset or three failed decodes; nulling a sheet
+     * alone would leave that half of emoji disabled for the rest of the session.
+     * The short cooldowns stop a shed/reload/shed cycle from decoding again on
+     * the very next paint, which was measurable as handset heat.
      *
-     * The sheet is the largest thing on the pressure ladder; on a 32bpp handset
-     * the 256x176 PNG decodes to roughly 180 KB of live heap.
+     * The sheets are the largest things on the pressure ladder: on a 32bpp
+     * handset the 256x176 core is roughly 180 KB and the 256x224 extended
+     * sheet another 230 KB of live heap.
      */
     public static synchronized void release()
     {
         sheet = null;
+        extSheet = null;
         loadAttempted = false;
+        extLoadAttempted = false;
         loadFailures = 0;
+        extLoadFailures = 0;
         nextLoadAt = System.currentTimeMillis() + 1000L;
+        extNextLoadAt = nextLoadAt;
+    }
+
+    private static Image sheetFor(int cell)
+    {
+        return cell >= EmojiData.EXT_BASE ? extSprites() : sprites();
     }
 
     private static synchronized Image sprites()
@@ -350,5 +449,39 @@ public final class EmojiText
             if (in != null) { try { in.close(); } catch (IOException ignored) { } }
         }
         return sheet;
+    }
+
+    private static synchronized Image extSprites()
+    {
+        if (extSheet != null) { return extSheet; }
+        if (extLoadAttempted) { return null; }
+
+        long now = System.currentTimeMillis();
+        if (now < extNextLoadAt) { return null; }
+        extNextLoadAt = now + 1000L;
+
+        InputStream in = null;
+        try
+        {
+            in = EmojiText.class.getResourceAsStream("/emoji_ext.png");
+            if (in == null)
+            {
+                extLoadAttempted = true;
+                return null;
+            }
+            extSheet = Image.createImage(in);
+            extLoadAttempted = extSheet != null;
+        }
+        catch (Throwable ignored)
+        {
+            extSheet = null;
+            extLoadFailures++;
+            if (extLoadFailures >= 3) { extLoadAttempted = true; }
+        }
+        finally
+        {
+            if (in != null) { try { in.close(); } catch (IOException ignored) { } }
+        }
+        return extSheet;
     }
 }
