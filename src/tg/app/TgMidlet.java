@@ -1523,8 +1523,20 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
         }
         else if (c == cmdExit)
         {
-            destroyApp(true);
-            notifyDestroyed();
+            try
+            {
+                destroyApp(true);
+            }
+            catch (Throwable ignored)
+            {
+            }
+            try
+            {
+                notifyDestroyed();
+            }
+            catch (Throwable ignored)
+            {
+            }
         }
         else if (c == cmdEmoji)
         {
