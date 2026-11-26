@@ -115,7 +115,27 @@ public final class Notifier
             writeUtf(out, trimUtf(text, MAX_TEXT_BYTES));
             out.flush();
             in = connection.openInputStream();
-            return in.read() == 1 ? null : "the bridge refused the note";
+            final SocketConnection conn = connection;
+            final boolean[] done = new boolean[1];
+            Thread timer = new Thread(new Runnable()
+            {
+                public void run()
+                {
+                    try
+                    {
+                        Thread.sleep(3500);
+                        if (!done[0] && conn != null)
+                        {
+                            conn.close();
+                        }
+                    }
+                    catch (Throwable ignored) {}
+                }
+            });
+            timer.start();
+            int reply = in.read();
+            done[0] = true;
+            return reply == 1 ? null : "the bridge refused the note";
         }
         catch (Throwable failed)
         {

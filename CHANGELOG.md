@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.10
+
+### Fixed
+
+- Added a 3.5-second timeout watcher to `Notifier.deliverTo`: prevents the worker thread and `post()` delivery queue from hanging permanently if NotiHelper or the socket bridge connection stalls during handshake or reply.
+
 ## 0.2.9
 
 ### Fixed
