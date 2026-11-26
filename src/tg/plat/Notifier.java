@@ -123,7 +123,7 @@ public final class Notifier
                 {
                     try
                     {
-                        Thread.sleep(3500);
+                        Thread.sleep(25000);
                         if (!done[0] && conn != null)
                         {
                             conn.close();
