@@ -86,15 +86,16 @@ public final class FileStore
         return "file:///C/ResyGram/Videos/";
     }
 
-    /** Remove the previous video handoff. Safe to call after every resume. */
-    public static void cleanupVideos()
+    /** Remove the previous video handoff. Returns the count of deleted files. */
+    public static int cleanupVideos()
     {
+        int deleted = 0;
         FileConnection dir = null;
         try
         {
             dir = (FileConnection) Connector.open(videosDir(),
                     Connector.READ_WRITE);
-            if (!dir.exists()) { return; }
+            if (!dir.exists()) { return 0; }
             java.util.Enumeration names = dir.list();
             while (names != null && names.hasMoreElements())
             {
@@ -105,7 +106,11 @@ public final class FileStore
                 {
                     file = (FileConnection) Connector.open(
                             videosDir() + name, Connector.READ_WRITE);
-                    if (file.exists() && !file.isDirectory()) { file.delete(); }
+                    if (file.exists() && !file.isDirectory())
+                    {
+                        file.delete();
+                        deleted++;
+                    }
                 }
                 catch (Throwable ignored) { }
                 finally
@@ -125,6 +130,7 @@ public final class FileStore
                 try { dir.close(); } catch (Throwable ignored) { }
             }
         }
+        return deleted;
     }
 
     /** The folders worth browsing first, labelled the way the phone labels them. */

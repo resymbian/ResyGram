@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.12
+
+### Added
+- Auto-connect when already authorized: bypasses the setup "Connect" screen and automatically loads dialogs and connects.
+- Working cancel button during video downloads via custom softkeys on BusyScreen.
+- Count of deleted video files reported when running clean videos command.
+
+### Fixed
+- Video streaming: non-blocking `platformRequest()` check allowing RealPlayer streaming without falling back to full download.
+
 ## 0.2.10
 
 ### Fixed

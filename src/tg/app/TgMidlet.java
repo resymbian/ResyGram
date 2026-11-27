@@ -1049,14 +1049,16 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
      * foreground is the reliable signal: stop the loopback server and remove
      * the temporary copy from the last video handoff.
      */
-    private void cleanupReturnedVideo()
+    private String cleanupReturnedVideo()
     {
         VideoStreamer.stop();
+        int count = 0;
         if (FileStore.available())
         {
-            try { FileStore.cleanupVideos(); }
+            try { count = FileStore.cleanupVideos(); }
             catch (Throwable ignored) { }
         }
+        return count > 0 ? (count + " vídeo(s) eliminados") : "No había vídeos guardados";
     }
 
     protected void startApp()
@@ -1290,7 +1292,7 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
             {
                 heapProbeRunning = probe;
                 stopSplash();
-                showStartScreen();
+                autoConnectOrStartScreen();
                 startHeapProbe();
             }
         });
@@ -1384,7 +1386,7 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
             avatarCache = new AvatarCache();
             if (dialogList != null) { dialogList.setAvatarCache(avatarCache); }
         }
-        showStartScreen();          // drops the "measuring" line, adds any warning
+        autoConnectOrStartScreen();          // drops the "measuring" line, adds any warning
     }
 
     protected void pauseApp()
@@ -2159,9 +2161,8 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
         }
         else if (c == cmdCleanVideos)
         {
-            try { cleanupReturnedVideo(); }
-            catch (Throwable ignored) { }
-            showAlert("Vídeos temporales borrados", AlertType.INFO, display.getCurrent());
+            String result = cleanupReturnedVideo();
+            showAlert(result, AlertType.INFO, display.getCurrent());
         }
         else if (c == cmdSettings)
         {
@@ -2392,6 +2393,30 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
     }
 
     // -------------------------------------------------------------- login
+
+    private void autoConnectOrStartScreen()
+    {
+        if ("1".equals(store.loadString("authorized")))
+        {
+            if (showCachedDialogsOffline())
+            {
+                connectAndCheck();
+            }
+            else
+            {
+                showBusy("Connecting", "Connecting using "
+                         + ConnectionConfig.name(connectionConfig.mode) + "...");
+                if (!connectAndCheck())
+                {
+                    showStartScreen();
+                }
+            }
+        }
+        else
+        {
+            showStartScreen();
+        }
+    }
 
     private void showStartScreen()
     {
@@ -12491,9 +12516,7 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
                         (int) Math.min(document.size, 0x7fffffffL)));
         final DownloadToken token = new DownloadToken();
         final Command cmdCancelDownload = new Command("Cancelar", Command.BACK, 1);
-        busy.addCommand(cmdCancelDownload);
-        busy.addCommand(cmdLog);
-        busy.addCommand(cmdExit);
+        busy.setSoftKeys(cmdCancelDownload, new Command[] { cmdLog, cmdExit });
         busy.setCommandListener(new CommandListener()
         {
             public void commandAction(Command c, Displayable d)
@@ -12606,12 +12629,10 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
         if (url == null) { return false; }
         try
         {
-            if (platformRequest(url))
-            {
-                // Do not destroy: the loopback server must keep serving bytes.
-                chatScreen.setStatus("Streaming video; nothing saved");
-                return true;
-            }
+            platformRequest(url);
+            // On Symbian S60 platformRequest returns false when the MIDlet can keep running.
+            chatScreen.setStatus("Streaming video; nothing saved");
+            return true;
         }
         catch (Throwable refused)
         {
