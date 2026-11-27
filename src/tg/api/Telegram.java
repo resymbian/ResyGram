@@ -499,6 +499,7 @@ public final class Telegram
         synchronized (lifecycleLock)
         {
             foreground = true;
+            if (connectionState == ONLINE) { return; }
             reconnectToken++;
             lifecycleLock.notifyAll();
         }

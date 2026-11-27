@@ -1393,7 +1393,10 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
         // Stop the activity pulse from repainting a screen the user cannot see.
         paused = true;
         saveDraftNow();
-        if (telegram != null) { telegram.pause(); }
+        if (telegram != null && (appSettings == null || !appSettings.notifications))
+        {
+            telegram.pause();
+        }
     }
 
     protected void destroyApp(boolean unconditional)
@@ -7393,7 +7396,7 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
         screen.setSoftKeys(primary, new Command[]
         {
             cmdBack, cmdWrite, cmdReply, cmdForward, cmdOpenMedia, cmdSendPhoto,
-            cmdSendFile, cmdReactions, cmdViewFullText, cmdEntityActions,
+            cmdSendFile, cmdCleanVideos, cmdReactions, cmdViewFullText, cmdEntityActions,
             cmdEditMessage, cmdOpenComments, cmdRevealSpoiler, cmdPoll,
             cmdDeleteMessage, cmdFindMessages, cmdOlder, cmdJumpLatest,
             cmdFirstUnread, cmdMarkAllRead, cmdChatInfo, cmdProfile,
@@ -12486,12 +12489,27 @@ public class TgMidlet extends MIDlet implements CommandListener, MemoryRelief
                 video ? "Downloading small video" : "Downloading",
                 document.fileName + "  " + FileStore.humanSize(
                         (int) Math.min(document.size, 0x7fffffffL)));
+        final DownloadToken token = new DownloadToken();
+        final Command cmdCancelDownload = new Command("Cancelar", Command.BACK, 1);
+        busy.addCommand(cmdCancelDownload);
         busy.addCommand(cmdLog);
         busy.addCommand(cmdExit);
-        busy.setCommandListener(this);
+        busy.setCommandListener(new CommandListener()
+        {
+            public void commandAction(Command c, Displayable d)
+            {
+                if (c == cmdCancelDownload)
+                {
+                    token.cancel();
+                    restoreScreen(chatScreen);
+                }
+                else
+                {
+                    TgMidlet.this.commandAction(c, d);
+                }
+            }
+        });
         display.setCurrent(busy);
-
-        final DownloadToken token = new DownloadToken();
         final AsyncScope.Token asked = scope.capture();
         boolean submitted = worker.submit(new Worker.Task()
         {
